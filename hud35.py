@@ -2,8 +2,8 @@
 import time, requests, json, evdev, spotipy, colorsys, datetime, os, subprocess, toml, random
 import numpy as np
 from io import BytesIO
-from PIL import Image, ImageDraw, ImageFont, ImageStat
-from threading import Thread, Event, Lock, RLock
+from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageEnhance
+from threading import Thread, Event, RLock
 from spotipy.oauth2 import SpotifyOAuth
 
 FB_DEVICE = "/dev/fb1"
@@ -11,7 +11,7 @@ SCREEN_WIDTH = 480
 SCREEN_HEIGHT = 320
 UPDATE_INTERVAL_WEATHER = 3600
 GEO_UPDATE_INTERVAL = 3600
-SPOTIFY_UPDATE_INTERVAL = 5
+SPOTIFY_UPDATE_INTERVAL = 2
 SCOPE = "user-read-currently-playing"
 USE_GPSD = True
 USE_GOOGLE_GEO = True
@@ -28,7 +28,7 @@ DEFAULT_CONFIG = {
         "small_font_path": "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
         "small_font_size": 16,
         "spot_large_font_path": "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-        "spot_large_font_size": 36,
+        "spot_large_font_size": 26,
         "spot_medium_font_path": "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
         "spot_medium_font_size": 18,
         "spot_small_font_path": "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
@@ -365,19 +365,60 @@ def get_contrasting_colors(img, n=2):
         colors.append((int(r2*255), int(g2*255), int(b2*255)))
     return colors[:n]
 
-def make_solid_background_from_art(size, album_art_img):
+def make_background_from_art(size, album_art_img):
     width, height = size
+    if album_art_img is None:
+        bg = Image.new("RGB", size, (40, 40, 60))
+        for y in range(height):
+            factor = 0.7 + (y / height) * 0.6
+            for x in range(width):
+                r, g, b = bg.getpixel((x, y))
+                bg.putpixel((x, y), (int(r * factor), int(g * factor), int(b * factor)))
+        return bg
     if album_art_img.mode != "RGB":
-        img = album_art_img.convert("RGB")
-    else:
-        img = album_art_img
-    small_img = img.resize((50, 50))
-    pixels = list(small_img.getdata())
+        album_art_img = album_art_img.convert("RGB")
+    small = album_art_img.resize((50, 50), Image.LANCZOS)
+    pixels = list(small.getdata())
     r = sum(p[0] for p in pixels) // len(pixels)
     g = sum(p[1] for p in pixels) // len(pixels)
     b = sum(p[2] for p in pixels) // len(pixels)
-    background = Image.new("RGB", (width, height), (r, g, b))
-    return background
+    avg_color = (int(r * 0.7), int(g * 0.7), int(b * 0.7))
+    bg = Image.new("RGB", size, avg_color)
+    art_size = height
+    scaled_art = album_art_img.resize((art_size, art_size), Image.LANCZOS)
+    blurred_art = scaled_art.filter(ImageFilter.GaussianBlur(4))
+    enhancer = ImageEnhance.Brightness(blurred_art)
+    blurred_art = enhancer.enhance(0.6)
+    fade_width = min(80, art_size // 4)
+    mask = Image.new("L", (art_size, art_size), 0)
+    for x in range(art_size):
+        if x < fade_width:
+            progress = x / fade_width
+            alpha = int(255 * (progress ** 0.7))
+        elif x > art_size - fade_width:
+            progress = (art_size - x) / fade_width
+            alpha = int(255 * (progress ** 0.7))
+        else:
+            alpha = 255
+        for y in range(art_size):
+            mask.putpixel((x, y), alpha)
+    art_x = (width - art_size) // 2
+    bg.paste(blurred_art, (art_x, 0), mask)
+    return bg
+
+cached_background = None
+current_art_hash = None
+
+def get_cached_background(size, album_art_img):
+    global cached_background, current_art_hash
+    if album_art_img is None:
+        art_hash = None
+    else:
+        art_hash = hash(album_art_img.tobytes())
+    if art_hash != current_art_hash or cached_background is None:
+        cached_background = make_background_from_art(size, album_art_img)
+        current_art_hash = art_hash
+    return cached_background.copy()
 
 def get_cached_background(size, album_art_img):
     if album_art_img is None:
@@ -387,7 +428,7 @@ def get_cached_background(size, album_art_img):
         bg = album_bg_cache[img_hash]
         if bg.size == size:
             return bg.copy()
-    bg = make_solid_background_from_art(size, album_art_img)
+    bg = make_background_from_art(size, album_art_img)
     album_bg_cache[img_hash] = bg.copy()
     return bg
 
@@ -464,7 +505,6 @@ def draw_weather_image(weather_info):
                 img.paste(icon_img, (SCREEN_WIDTH - icon_img.size[0], SCREEN_HEIGHT - icon_img.size[1] - 40 ), icon_img)
             except Exception as e:
                 print(f"Failed to load weather icon: {e}")
-
         if TIME_DISPLAY:
             now = datetime.datetime.now().strftime("%H:%M")
             time_bbox = TEXT_METRICS['time']
@@ -633,7 +673,7 @@ def draw_spotify_image(spotify_track):
     if layout:
         for item in layout:
             bg_width = min(item['label_width'] + 6 + item['text_width'] + 6, SCREEN_WIDTH - 5 - 5)
-            draw.rectangle([5, item['y'], 5 + bg_width, item['y'] + item['field_height']], fill=(0,0,0,170))
+            draw.rectangle([5, item['y'], 5 + bg_width, item['y'] + item['field_height']], fill=(0,0,0,200))
             draw.text((5, item['y'] + 4), item['label'], fill=secondary_color, font=SPOT_MEDIUM_FONT)
             if item['needs_scroll']:
                 scrolling_img = scrolling_text_cache.get(item['key'])
@@ -641,7 +681,7 @@ def draw_spotify_image(spotify_track):
                     offset = scroll_state[item['key']]["offset"]
                     crop_x = offset % (item['text_width'] + 50)
                     cropped = scrolling_img.crop((crop_x, 0, crop_x + item['visible_width'], item['field_height']))
-                    draw.rectangle([item['left_boundary'], item['y'], item['left_boundary'] + item['visible_width'], item['y'] + item['field_height']], fill=(0,0,0,170))
+                    draw.rectangle([item['left_boundary'], item['y'], item['left_boundary'] + item['visible_width'], item['y'] + item['field_height']], fill=(0,0,0,200))
                     overlay.paste(cropped, (item['left_boundary'], item['y']), cropped)
                 else:
                     draw.text((item['left_boundary'], item['y'] + 4), item['data'], fill=main_color, font=SPOT_MEDIUM_FONT)
@@ -655,17 +695,52 @@ def draw_spotify_image(spotify_track):
             img.paste(bg_img, (0, 0))
         error_text = "No track playing"
         bbox = get_cached_text_bbox(error_text, MEDIUM_FONT)
-        draw.rectangle([5, 5, min(bbox[2]+11, SCREEN_WIDTH-5), bbox[3]+9], fill=(0,0,0,180))
+        draw.rectangle([5, 5, min(bbox[2]+11, SCREEN_WIDTH-5), bbox[3]+9], fill=(0,0,0,200))
         draw.text((11, 9), error_text, fill="red", font=MEDIUM_FONT)
-    if TIME_DISPLAY:
-        now = datetime.datetime.now().strftime("%H:%M")
-        time_bbox = TEXT_METRICS['time']
+    if spotify_track and 'current_position' in spotify_track and 'duration' in spotify_track:
+        current_pos = spotify_track['current_position']
+        duration = spotify_track['duration']
+        current_min = current_pos // 60
+        current_sec = current_pos % 60
+        duration_min = duration // 60
+        duration_sec = duration % 60
+        time_text = f"{current_min}:{current_sec:02d} / {duration_min}:{duration_sec:02d}"
+        time_bbox = SPOT_LARGE_FONT.getbbox(time_text)
         time_width = time_bbox[2] - time_bbox[0]
         time_height = time_bbox[3] - time_bbox[1]
-        time_x = SCREEN_WIDTH - time_width - 10
-        time_y = SCREEN_HEIGHT - time_height - 10
-        draw.rectangle([time_x, time_y, time_x + time_width, time_y + time_height + 5], fill=(0, 0, 0, 170))
-        draw.text((time_x, time_y), now, fill="gray", font=SPOT_MEDIUM_FONT)
+        padding = 5
+        background_width = time_width + 2 * padding
+        background_height = time_height + 2 * padding
+        time_x = 10
+        time_y = SCREEN_HEIGHT - background_height - 10
+        draw.rectangle([
+            time_x, 
+            time_y, 
+            time_x + background_width, 
+            time_y + background_height
+        ], fill=(0, 0, 0, 200))
+        text_x = time_x + padding
+        text_y = time_y + padding - time_bbox[1]
+        draw.text((text_x, text_y), time_text, fill=secondary_color, font=SPOT_LARGE_FONT)
+    if TIME_DISPLAY:
+        now = datetime.datetime.now().strftime("%H:%M")
+        time_bbox = SPOT_LARGE_FONT.getbbox(now)
+        time_width = time_bbox[2] - time_bbox[0]
+        time_height = time_bbox[3] - time_bbox[1]
+        padding = 5
+        background_width = time_width + 2 * padding
+        background_height = time_height + 2 * padding
+        time_x = SCREEN_WIDTH - background_width - 10
+        time_y = SCREEN_HEIGHT - background_height - 10
+        draw.rectangle([
+            time_x, 
+            time_y, 
+            time_x + background_width, 
+            time_y + background_height
+        ], fill=(0, 0, 0, 170))
+        text_x = time_x + padding
+        text_y = time_y + padding - time_bbox[1]
+        draw.text((text_x, text_y), now, fill=main_color, font=SPOT_LARGE_FONT)
     img = Image.alpha_composite(img.convert("RGBA"), overlay).convert("RGB")
     return img
 
@@ -760,10 +835,15 @@ def spotify_loop():
                 artists_list = [artist['name'] for artist in item.get('artists', [])]
                 artist_str = ", ".join(artists_list) if artists_list else "Unknown Artist"
                 album_str = item['album']['name'] if item.get('album') else "Unknown Album"
+                current_position = track.get('progress_ms', 0) // 1000
+                duration = item.get('duration_ms', 0) // 1000
                 new_track = {
                     "title": item.get('name', "Unknown Track"),
                     "artists": artist_str,
-                    "album": album_str
+                    "album": album_str,
+                    "current_position": current_position,
+                    "duration": duration,
+                    "is_playing": track.get('is_playing', False)
                 }
                 if item.get('album') and item['album'].get('images'):
                     art_url = item['album']['images'][0]['url']
@@ -838,10 +918,14 @@ def spotify_loop():
                 last_track_id = current_id
                 if START_SCREEN == "spotify":
                     update_display()
+            else:
+                if spotify_track is not None:
+                    spotify_track['current_position'] = track.get('progress_ms', 0) // 1000
+                    spotify_track['is_playing'] = track.get('is_playing', False)
         except Exception as e:
             print(f"Spotify error: {e}")
             spotify_error_count += 1
-            sleep_time = min(30, 2 ** spotify_error_count)  # Exponential backoff
+            sleep_time = min(30, 2 ** spotify_error_count)
             time.sleep(sleep_time)
             spotify_track = None
             update_spotify_layout(None)
