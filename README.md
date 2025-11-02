@@ -30,8 +30,8 @@ cd hud35
 ```bash
 # Install system packages
 sudo apt update
-sudo apt install python3-pip python3-requests python3-spotipy python3-pil python3-evdev python3-toml python3-numpy
-
+sudo apt install python3-pip python3-requests  python3-pil python3-evdev python3-toml python3-numpy
+python3-spotipy will need to be installed via pip
 # Or install via pip
 pip3 install -r requirements.txt
 ```
