@@ -36,18 +36,6 @@ sudo ./LCD35-show
 
 The system will reboot after installation. The display should now work at the correct resolution (480x320) with touch functionality.
 
-## Display Setup (3.5" ILI9486 TFT with Touch)
-
-For setting up the 3.5" ILI9486 TFT display with XPT2046 touch controller:
-
-```bash
-sudo apt update
-sudo apt install git
-git clone https://github.com/Shinigamy19/RaspberryPi3bplus-3.5inch-displayA-ILI9486-MPI3501-XPT2046  
-mv RaspberryPi3bplus-3.5inch-displayA-ILI9486-MPI3501-XPT2046 LCD-show
-cd LCD-show
-chmod +x LCD35-show
-sudo ./LCD35-show
 ```
 
 The system will reboot after installation. The display should now work at the correct resolution (480x320) with touch functionality.
