@@ -5,6 +5,9 @@ A Raspberry Pi-based display system that shows weather information and currently
 
 ![HUD35 Display System in action](display.gif)
 
+(city is censored lol)
+
+
 ## Features
 
 - **Weather Display**: Shows current weather with location detection (GPS, Google Geolocation, or fallback city)
