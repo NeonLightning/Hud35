@@ -18,6 +18,22 @@ A Raspberry Pi-based display system that shows weather information and currently
 - Touch screen input
 - Internet connection
 
+## Display Setup (3.5" ILI9486 TFT with Touch)
+
+For setting up the 3.5" ILI9486 TFT display with XPT2046 touch controller:
+
+```bash
+sudo apt update
+sudo apt install git
+git clone https://github.com/Shinigamy19/RaspberryPi3bplus-3.5inch-displayA-ILI9486-MPI3501-XPT2046  
+mv RaspberryPi3bplus-3.5inch-displayA-ILI9486-MPI3501-XPT2046 LCD-show
+cd LCD-show
+chmod +x LCD35-show
+sudo ./LCD35-show
+```
+
+The system will reboot after installation. The display should now work at the correct resolution (480x320) with touch functionality.
+
 ## Installation
 
 ### 1. Clone the Repository
@@ -30,10 +46,8 @@ cd hud35
 ```bash
 # Install system packages
 sudo apt update
-sudo apt install python3-pip python3-requests  python3-pil python3-evdev python3-toml python3-numpy
-python3-spotipy will need to be installed via pip
-# Or install via pip
-pip3 install -r requirements.txt
+sudo apt install python3-pip python3-evdev python3-numpy python3-pil
+sudo pip3 install spotipy --break-system-packages
 ```
 
 ### 3. Spotify API Setup
@@ -59,7 +73,7 @@ client_secret = "your_spotify_client_secret_here"
 redirect_uri = "http://127.0.0.1:8080"
 ```
 
-### 5. OpenWeatherMap API
+### 4. OpenWeatherMap API
 1. Sign up at [OpenWeatherMap](https://openweathermap.org/api)
 2. Get your API key
 3. Add to `config.toml`:
@@ -68,7 +82,7 @@ redirect_uri = "http://127.0.0.1:8080"
 openweather = "your_openweather_api_key_here"
 ```
 
-### 6. Google Geolocation API (Optional)
+### 5. Google Geolocation API (Optional)
 1. Create a project in [Google Cloud Console](https://console.cloud.google.com/)
 2. Enable the Geolocation API
 3. Create an API key
@@ -78,7 +92,7 @@ openweather = "your_openweather_api_key_here"
 google_geo = "your_google_geo_api_key_here"
 ```
 
-### 7. Initial Spotify Authentication
+### 6. Initial Spotify Authentication
 
 **This step is required before installing as a service:**
 
@@ -95,7 +109,7 @@ The first time you run it:
 
 Once you see weather and/or Spotify information on your display, press `Ctrl+C` to stop the program.
 
-### 8. Install as a Service
+### 7. Install as a Service
 
 ```bash
 # Make the installer executable and run it
@@ -111,17 +125,6 @@ The installer will:
 ## Configuration
 
 Edit `/opt/hud35/config.toml` after installation:
-
-### Key Settings
-
-```toml
-[settings]
-start_screen = "weather"  # or "spotify"
-fallback_city = "London"  # Used if GPS location fails
-use_gpsd = true           # Use GPSD for location
-use_google_geo = true     # Use Google Geolocation as backup
-time_display = true       # Show current time
-```
 
 ### Font Settings
 You can customize fonts and sizes in the `[fonts]` section.
@@ -174,28 +177,6 @@ This will remove:
 - Service configuration
 
 *Note: Python dependencies and your config file will remain.*
-
-## Troubleshooting
-
-### Common Issues
-
-1. **No display output**
-   - Check SPI is enabled in `raspi-config`
-   - Verify display connections
-
-2. **Spotify not working**
-   - Ensure you completed the initial authentication step
-   - Check `.spotify_cache` exists and is valid
-   - Verify Client ID and Secret in config
-
-3. **Weather not loading**
-   - Check internet connection
-   - Verify OpenWeatherMap API key
-   - Check fallback city is set
-
-4. **Touch not working**
-   - Verify touchscreen device is detected
-   - Check evdev can access input device
 
 ### Logs
 View detailed logs with:

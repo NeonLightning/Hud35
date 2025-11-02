@@ -611,18 +611,83 @@ def spotify_loop():
     global START_SCREEN, spotify_track, sp, album_art_image, scrolling_text_cache
     sp_oauth = SpotifyOAuth(client_id=SPOTIFY_CLIENT_ID, client_secret=SPOTIFY_CLIENT_SECRET, redirect_uri=REDIRECT_URI, scope=SCOPE, cache_path=".spotify_cache")
     token_info = sp_oauth.get_cached_token()
-    if not token_info: return
+    if not token_info:
+        print("No cached Spotify token found. Starting headless authentication...")
+        auth_url = sp_oauth.get_authorize_url()
+        print(f"\n=== SPOTIFY AUTHENTICATION REQUIRED ===")
+        print(f"1. Open this URL in a browser on another device:")
+        print(f"   {auth_url}")
+        print(f"2. After authorizing, you'll be redirected to a blank page")
+        print(f"3. Copy the ENTIRE URL from the address bar of the blank page")
+        print(f"4. Paste it below\n")
+        try:
+            redirect_response = input("Paste the redirect URL here: ").strip()
+            if "code=" in redirect_response:
+                code = sp_oauth.parse_response_code(redirect_response)
+                if code:
+                    print("Exchanging code for access token...")
+                    try:
+                        access_token = sp_oauth.get_access_token(code, as_dict=False)
+                        token_info = {
+                            'access_token': access_token,
+                            'token_type': 'Bearer', 
+                            'expires_in': 3600,
+                            'scope': SCOPE,
+                            'expires_at': time.time() + 3600
+                        }
+                    except TypeError:
+                        token_info = sp_oauth.get_access_token(code, as_dict=True)
+                    if token_info:
+                        print("Spotify authentication successful!")
+                    else:
+                        print("Failed to get access token.")
+                        return
+                else:
+                    print("Could not extract authorization code from URL.")
+                    return
+            else:
+                print("Invalid redirect URL. Make sure it contains 'code='.")
+                return
+        except (KeyboardInterrupt, EOFError):
+            print("\nAuthentication cancelled.")
+            return
+        except Exception as e:
+            print(f"Authentication error: {e}")
+            return
     def get_spotify_client():
         nonlocal token_info
+        if not isinstance(token_info, dict):
+            token_info = {
+                'access_token': token_info,
+                'token_type': 'Bearer',
+                'expires_in': 3600,
+                'scope': SCOPE,
+                'expires_at': time.time() + 3600
+            }
         if sp_oauth.is_token_expired(token_info):
-            token_info = sp_oauth.refresh_access_token(token_info['refresh_token'])
+            try:
+                if 'refresh_token' in token_info:
+                    print("Refreshing access token...")
+                    token_info = sp_oauth.refresh_access_token(token_info['refresh_token'])
+                else:
+                    print("No refresh token available. Re-authentication required.")
+                    return None
+            except Exception as e:
+                print(f"Error refreshing token: {e}")
+                return None
         return spotipy.Spotify(auth=token_info['access_token'])
     sp = get_spotify_client()
+    if sp is None:
+        print("Failed to initialize Spotify client.")
+        return
     last_track_id = None
     spotify_error_count = 0
     while not exit_event.is_set():
         try:
             sp = get_spotify_client()
+            if sp is None:
+                time.sleep(10)
+                continue
             track = sp.current_user_playing_track()
             spotify_error_count = 0
             current_id = None
@@ -712,8 +777,9 @@ def spotify_loop():
                 if spotify_track is not None:
                     spotify_track['current_position'] = track.get('progress_ms', 0) // 1000
                     spotify_track['is_playing'] = track.get('is_playing', False)
-        except Exception:
+        except Exception as e:
             spotify_error_count += 1
+            print(f"Spotify error ({spotify_error_count}): {e}")
             sleep_time = min(30, 2 ** spotify_error_count)
             time.sleep(sleep_time)
             spotify_track = None

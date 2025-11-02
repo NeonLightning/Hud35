@@ -73,27 +73,9 @@ echo "PYTHON DEPENDENCIES REQUIRED"
 echo "----------------------------------------"
 echo "Before running HUD35, install the required dependencies:"
 echo ""
-if [ -f "requirements.txt" ]; then
-    echo "Using pip:"
-    echo "  pip3 install -r requirements.txt"
-    echo ""
-    echo "Or using apt (on Debian/Ubuntu):"
-    echo "  apt update"
-    echo "  apt install python3-requests python3-spotipy python3-pil python3-evdev python3-toml python3-numpy"
-else
-    echo "Required packages:"
-    echo "  requests, spotipy, Pillow, evdev, toml, numpy"
-    echo ""
-    echo "Install with pip:"
-    echo "  pip3 install requests spotipy Pillow evdev toml numpy"
-    echo ""
-    echo "Or using apt (on Debian/Ubuntu):"
-    echo "  apt update"
-    echo "  apt install python3-requests python3-spotipy python3-pil python3-evdev python3-toml python3-numpy"
-fi
-echo "----------------------------------------"
-echo ""
-
+echo "sudo apt update"
+echo "sudo apt install python3-pip python3-evdev python3-numpy python3-pil"
+echo "sudo pip3 install spotipy --break-system-packages"
 read -p "Press Enter to continue with installation..."
 
 # Create service file

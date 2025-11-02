@@ -1,0 +1,10 @@
+sudo apt update
+sudo apt install git
+git clone https://github.com/Shinigamy19/RaspberryPi3bplus-3.5inch-displayA-ILI9486-MPI3501-XPT2046
+mv RaspberryPi3bplus-3.5inch-displayA-ILI9486-MPI3501-XPT2046 LCD-show
+cd LCD-show
+chmod +x LCD35-show
+sudo ./LCD35-show
+
+sudo apt install python3-pip python3-evdev python3-numpy python3-pil
+sudo pip3 install spotipy --break-system-packages
