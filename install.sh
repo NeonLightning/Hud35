@@ -40,10 +40,34 @@ if [ -f "/etc/systemd/system/hud35.service" ]; then
     echo "Reinstalling..."
 fi
 
+# Check if neonwifi.py exists and offer to install it
+INSTALL_NEONWIFI="n"
+if [ -f "neonwifi.py" ]; then
+    echo ""
+    echo "📶 NEONWIFI DETECTED"
+    echo "----------------------------------------"
+    echo "Found neonwifi.py - WiFi Manager for easy network setup"
+    read -p "Do you want to install neonwifi as a service? (y/n): " -n 1 -r
+    echo ""
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        INSTALL_NEONWIFI="y"
+        echo "✓ Will install neonwifi service"
+    else
+        echo "ℕ Skipping neonwifi installation"
+    fi
+fi
+
 # Copy files
+echo ""
 echo "Copying files to /opt/hud35..."
 sudo mkdir -p /opt/hud35/bg
 sudo cp hud35.py /opt/hud35/
+
+# Copy neonwifi if requested
+if [ "$INSTALL_NEONWIFI" = "y" ]; then
+    sudo cp neonwifi.py /opt/hud35/
+    echo "✓ neonwifi.py copied"
+fi
 
 # Copy config.toml if it exists
 if [ -f "config.toml" ]; then
@@ -58,6 +82,7 @@ sudo cp .spotify_cache /opt/hud35/
 echo "✓ .spotify_cache copied (Spotify authentication)"
 sudo cp uninstall.sh /opt/hud35
 echo "✓ copied uninstall.sh"
+
 # Copy background images if they exist
 if [ -d "bg" ] && [ "$(ls -A bg 2>/dev/null)" ]; then
     sudo cp bg/* /opt/hud35/bg/
@@ -73,32 +98,20 @@ echo "PYTHON DEPENDENCIES REQUIRED"
 echo "----------------------------------------"
 echo "Before running HUD35, install the required dependencies:"
 echo ""
-if [ -f "requirements.txt" ]; then
-    echo "Using pip:"
-    echo "  pip3 install -r requirements.txt"
-    echo ""
-    echo "Or using apt (on Debian/Ubuntu):"
-    echo "  apt update"
-    echo "  apt install python3-requests python3-spotipy python3-pil python3-evdev python3-toml python3-numpy"
-else
-    echo "Required packages:"
-    echo "  requests, spotipy, Pillow, evdev, toml, numpy"
-    echo ""
-    echo "Install with pip:"
-    echo "  pip3 install requests spotipy Pillow evdev toml numpy"
-    echo ""
-    echo "Or using apt (on Debian/Ubuntu):"
-    echo "  apt update"
-    echo "  apt install python3-requests python3-spotipy python3-pil python3-evdev python3-toml python3-numpy"
+echo "sudo apt update"
+echo "sudo apt install python3-pip python3-evdev python3-numpy python3-pil"
+echo "sudo pip3 install spotipy --break-system-packages"
+
+# Additional dependencies for neonwifi if installed
+if [ "$INSTALL_NEONWIFI" = "y" ]; then
+    echo "sudo apt install python3-flask"
 fi
-echo "----------------------------------------"
-echo ""
 
 read -p "Press Enter to continue with installation..."
 
-# Create service file
+# Create HUD35 service file
 echo ""
-echo "Creating systemd service..."
+echo "Creating HUD35 systemd service..."
 sudo tee /etc/systemd/system/hud35.service > /dev/null <<EOF
 [Unit]
 Description=HUD35 Display Service
@@ -118,14 +131,48 @@ Environment=PYTHONUNBUFFERED=1
 WantedBy=multi-user.target
 EOF
 
+# Create neonwifi service file if requested
+if [ "$INSTALL_NEONWIFI" = "y" ]; then
+    echo "Creating neonwifi systemd service..."
+    sudo tee /etc/systemd/system/neonwifi.service > /dev/null <<EOF
+[Unit]
+Description=NeonWiFi Manager Service
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/hud35
+ExecStart=/usr/bin/python3 /opt/hud35/neonwifi.py
+Restart=always
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
+EOF
+fi
+
 # Set permissions
 sudo chmod +x /opt/hud35/hud35.py
+if [ "$INSTALL_NEONWIFI" = "y" ]; then
+    sudo chmod +x /opt/hud35/neonwifi.py
+fi
 sudo chown -R root:root /opt/hud35
 
-# Enable service
+# Enable services
 sudo systemctl daemon-reload
+
+# Start HUD35 service
 sudo systemctl enable hud35.service
 sudo systemctl start hud35.service
+
+# Start neonwifi service if installed
+if [ "$INSTALL_NEONWIFI" = "y" ]; then
+    sudo systemctl enable neonwifi.service
+    sudo systemctl start neonwifi.service
+fi
 
 echo ""
 echo "----------------------------------------"
@@ -133,20 +180,39 @@ echo "INSTALLATION COMPLETE"
 echo "----------------------------------------"
 echo ""
 echo "✓ Spotify authentication was copied"
-echo "✓ Service is installed and enabled"
+echo "✓ HUD35 service is installed and enabled"
+
+if [ "$INSTALL_NEONWIFI" = "y" ]; then
+    echo "✓ neonwifi service is installed and enabled"
+    echo ""
+    echo "NEONWIFI ACCESS:"
+    echo "  Connect to WiFi: 'WiFi-Manager' (open network)"
+    echo "  Visit: http://192.168.42.1"
+    echo "  To stop neonwifi: sudo systemctl stop neonwifi.service"
+fi
+
 echo ""
 echo "NEXT STEPS:"
 if [ ! -f "config.toml" ]; then
     echo "1. Edit /opt/hud35/config.toml with your API keys (if needed)"
 fi
 echo "1. Install Python dependencies (see above)"
-echo "2. Start the service: sudo systemctl start hud35.service"
+echo "2. Check service status with commands below"
 echo ""
 echo "MANAGEMENT COMMANDS:"
-echo "  Start:  sudo systemctl start hud35.service"
-echo "  Stop:   sudo systemctl stop hud35.service"
-echo "  Status: sudo systemctl status hud35.service"
-echo "  Logs:   sudo journalctl -u hud35.service -f"
+echo "  HUD35 Start:  sudo systemctl start hud35.service"
+echo "  HUD35 Stop:   sudo systemctl stop hud35.service"
+echo "  HUD35 Status: sudo systemctl status hud35.service"
+echo "  HUD35 Logs:   sudo journalctl -u hud35.service -f"
+
+if [ "$INSTALL_NEONWIFI" = "y" ]; then
+    echo ""
+    echo "  NeonWiFi Start:  sudo systemctl start neonwifi.service"
+    echo "  NeonWiFi Stop:   sudo systemctl stop neonwifi.service"
+    echo "  NeonWiFi Status: sudo systemctl status neonwifi.service"
+    echo "  NeonWiFi Logs:   sudo journalctl -u neonwifi.service -f"
+fi
+
 echo ""
-echo "To uninstall: sudo ./uninstall.sh"
+echo "To uninstall: sudo /opt/hud35/uninstall.sh"
 echo "----------------------------------------"
