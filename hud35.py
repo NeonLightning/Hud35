@@ -23,7 +23,7 @@ DEFAULT_CONFIG = {
     "fonts": {
         "large_font_path": "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
         "large_font_size": 36,
-        "medium_font_path": "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 
+        "medium_font_path": "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
         "medium_font_size": 24,
         "small_font_path": "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
         "small_font_size": 16,
@@ -50,54 +50,35 @@ DEFAULT_CONFIG = {
     },
 }
 
-# Caches for optimization
 bg_cache = {}
 text_bbox_cache = {}
 weather_cache = {}
+album_bg_cache = {}
+cached_background = None
+current_art_hash = None
+exit_event = Event()
+art_lock = RLock()
+artist_image_lock = RLock()
+scroll_lock = RLock()
 
-def load_config():
-    config_path = "config.toml"
-    if not os.path.exists(config_path):
-        print(f"Config file {config_path} not found. Creating with default values...")
-        with open(config_path, 'w') as f:
+def load_config(path="config.toml"):
+    if not os.path.exists(path):
+        with open(path, 'w') as f:
             toml.dump(DEFAULT_CONFIG, f)
-        print(f"Default config created at {config_path}")
         return DEFAULT_CONFIG
     try:
-        with open(config_path, 'r') as f:
-            config = toml.load(f)
-        print(f"Config loaded from {config_path}")
-        return config
-    except Exception as e:
-        print(f"Error loading config: {e}. Using default values.")
+        with open(path, 'r') as f:
+            return toml.load(f)
+    except Exception:
         return DEFAULT_CONFIG
 
 config = load_config()
-
-LARGE_FONT = ImageFont.truetype(
-    config["fonts"]["large_font_path"], 
-    config["fonts"]["large_font_size"]
-)
-MEDIUM_FONT = ImageFont.truetype(
-    config["fonts"]["medium_font_path"], 
-    config["fonts"]["medium_font_size"]
-)
-SMALL_FONT = ImageFont.truetype(
-    config["fonts"]["small_font_path"], 
-    config["fonts"]["small_font_size"]
-)
-SPOT_LARGE_FONT = ImageFont.truetype(
-    config["fonts"]["spot_large_font_path"], 
-    config["fonts"]["spot_large_font_size"]
-)
-SPOT_MEDIUM_FONT = ImageFont.truetype(
-    config["fonts"]["spot_medium_font_path"], 
-    config["fonts"]["spot_medium_font_size"]
-)
-SPOT_SMALL_FONT = ImageFont.truetype(
-    config["fonts"]["spot_small_font_path"], 
-    config["fonts"]["spot_small_font_size"]
-)
+LARGE_FONT = ImageFont.truetype(config["fonts"]["large_font_path"], config["fonts"]["large_font_size"])
+MEDIUM_FONT = ImageFont.truetype(config["fonts"]["medium_font_path"], config["fonts"]["medium_font_size"])
+SMALL_FONT = ImageFont.truetype(config["fonts"]["small_font_path"], config["fonts"]["small_font_size"])
+SPOT_LARGE_FONT = ImageFont.truetype(config["fonts"]["spot_large_font_path"], config["fonts"]["spot_large_font_size"])
+SPOT_MEDIUM_FONT = ImageFont.truetype(config["fonts"]["spot_medium_font_path"], config["fonts"]["spot_medium_font_size"])
+SPOT_SMALL_FONT = ImageFont.truetype(config["fonts"]["spot_small_font_path"], config["fonts"]["spot_small_font_size"])
 OPENWEATHER_API_KEY = config["api_keys"]["openweather"]
 GOOGLE_GEO_API_KEY = config["api_keys"]["google_geo"]
 SPOTIFY_CLIENT_ID = config["api_keys"]["client_id"]
@@ -113,117 +94,89 @@ GAMMA = 1.5
 _gamma_r = np.array([int(((i / 255.0) ** (1 / GAMMA)) * 31 + 0.5) for i in range(256)], dtype=np.uint8)
 _gamma_g = np.array([int(((i / 255.0) ** (1 / GAMMA)) * 63 + 0.5) for i in range(256)], dtype=np.uint8)
 _gamma_b = np.array([int(((i / 255.0) ** (1 / GAMMA)) * 31 + 0.5) for i in range(256)], dtype=np.uint8)
-exit_event = Event()
+
 weather_info = None
 spotify_track = None
 sp = None
-scroll_state = {
-    "title": {"offset": 0, "max_offset": 0, "active": False},
-    "artists": {"offset": 0, "max_offset": 0, "active": False},
-    "album": {"offset": 0, "max_offset": 0, "active": False}
-}
-bg_map = {
-    "Clear": "bg_clear.png",
-    "Clouds": "bg_clouds.png",
-    "Rain": "bg_rain.png",
-    "Drizzle": "bg_drizzle.png",
-    "Thunderstorm": "bg_storm.png",
-    "Snow": "bg_snow.png",
-    "Mist": "bg_mist.png",
-    "Fog": "bg_fog.png",
-    "Haze": "bg_haze.png",
-    "Smoke": "bg_smoke.png",
-    "Dust": "bg_dust.png",
-    "Sand": "bg_sand.png",
-    "Ash": "bg_ash.png",
-    "Squall": "bg_squall.png",
-    "Tornado": "bg_tornado.png"
-}
 album_art_image = None
-art_pos = [float(SCREEN_WIDTH - 155), float(SCREEN_HEIGHT - 155)]
 artist_image = None
-artist_image_lock = RLock()
-art_lock = RLock()
+scroll_state = {"title": {"offset": 0, "max_offset": 0, "active": False}, "artists": {"offset": 0, "max_offset": 0, "active": False}, "album": {"offset": 0, "max_offset": 0, "active": False}}
+bg_map = {"Clear": "bg_clear.png", "Clouds": "bg_clouds.png", "Rain": "bg_rain.png", "Drizzle": "bg_drizzle.png", "Thunderstorm": "bg_storm.png", "Snow": "bg_snow.png", "Mist": "bg_mist.png", "Fog": "bg_fog.png", "Haze": "bg_haze.png", "Smoke": "bg_smoke.png", "Dust": "bg_dust.png", "Sand": "bg_sand.png", "Ash": "bg_ash.png", "Squall": "bg_squall.png", "Tornado": "bg_tornado.png"}
+art_pos = [float(SCREEN_WIDTH - 155), float(SCREEN_HEIGHT - 155)]
+artist_pos = [5, float(SCREEN_HEIGHT - 105)]
 artist_velocity = [0.7, 0.7]
 art_velocity = [1, 1]
-artist_pos = [5, float(SCREEN_HEIGHT - 105)]
 artist_on_top = False
-scroll_lock = RLock()
 spotify_layout_cache = None
 scrolling_text_cache = {}
-album_bg_cache = {}
 last_display_time = 0
 MIN_DISPLAY_INTERVAL = 0.001
 TEXT_METRICS = {}
 
 def init_text_metrics():
     global TEXT_METRICS
-    TEXT_METRICS = {
-        'time': MEDIUM_FONT.getbbox("00:00"),
-        'temp_large': LARGE_FONT.getbbox("000°C"),
-        'feels_like': MEDIUM_FONT.getbbox("Feels like: 000°C"),
-        'humidity': SMALL_FONT.getbbox("Humidity: 100%"),
-        'pressure': SMALL_FONT.getbbox("Pressure: 1000 hPa"),
-        'wind': SMALL_FONT.getbbox("Wind: 00.0 m/s")
-    }
-
+    TEXT_METRICS = {'time': MEDIUM_FONT.getbbox("00:00"), 'temp_large': LARGE_FONT.getbbox("000°C"), 'feels_like': MEDIUM_FONT.getbbox("Feels like: 000°C"), 'humidity': SMALL_FONT.getbbox("Humidity: 100%"), 'pressure': SMALL_FONT.getbbox("Pressure: 1000 hPa"), 'wind': SMALL_FONT.getbbox("Wind: 00.0 m/s")}
 init_text_metrics()
 
 def get_cached_bg(bg_path, size):
     key = (bg_path, size)
     if key not in bg_cache:
-        bg_img = Image.open(bg_path)
-        bg_img = bg_img.resize(size, Image.LANCZOS)
+        bg_img = Image.open(bg_path).resize(size, Image.LANCZOS)
         bg_cache[key] = bg_img
     return bg_cache[key]
 
 def get_cached_text_bbox(text, font):
-    key = (text, font.path, font.size)
+    key = (text, getattr(font, "path", None), getattr(font, "size", None))
     if key not in text_bbox_cache:
         text_bbox_cache[key] = font.getbbox(text)
     return text_bbox_cache[key]
 
 def cleanup_caches():
     global bg_cache, text_bbox_cache, album_bg_cache
-    if len(bg_cache) > 10:
-        bg_cache.clear()
-    if len(text_bbox_cache) > 100:
-        text_bbox_cache.clear()
+    if len(bg_cache) > 10: bg_cache.clear()
+    if len(text_bbox_cache) > 100: text_bbox_cache.clear()
     if len(album_bg_cache) > 5:
         keys = list(album_bg_cache.keys())[-3:]
         album_bg_cache = {k: album_bg_cache[k] for k in keys}
 
+def quantize_to_rgb565(r, g, b):
+    return (r // 8) * 8, (g // 4) * 4, (b // 8) * 8
+
+def display_image_on_framebuffer(image):
+    if image.mode != "RGB": image = image.convert("RGB")
+    if image.size != (SCREEN_WIDTH, SCREEN_HEIGHT):
+        full_img = Image.new("RGB", (SCREEN_WIDTH, SCREEN_HEIGHT), "black")
+        full_img.paste(image, (0, 0))
+        image = full_img
+    arr = np.array(image, dtype=np.uint8)
+    r = _gamma_r[arr[:, :, 0]].astype(np.uint16)
+    g = _gamma_g[arr[:, :, 1]].astype(np.uint16)
+    b = _gamma_b[arr[:, :, 2]].astype(np.uint16)
+    rgb565 = (r << 11) | (g << 5) | b
+    output = np.empty((SCREEN_HEIGHT, SCREEN_WIDTH, 2), dtype=np.uint8)
+    output[:, :, 0] = rgb565 & 0xFF
+    output[:, :, 1] = (rgb565 >> 8) & 0xFF
+    with open(FB_DEVICE, "wb") as fb:
+        fb.write(output.tobytes())
+
 def get_location_via_gpsd(timeout=5, debug=True):
     try:
-        dev_result = subprocess.run(
-            ['gpspipe', '-w', '-n', '2'],
-            capture_output=True, text=True, check=False
-        )
+        dev_result = subprocess.run(['gpspipe', '-w', '-n', '2'], capture_output=True, text=True, check=False)
         devices_found = False
         for line in dev_result.stdout.splitlines():
             try:
                 js = json.loads(line)
                 if js.get("class") == "DEVICES":
-                    if js.get("devices"):
-                        devices_found = True
-                    else:
-                        print("gpsd error: No GPS devices registered with gpsd.")
-                        return None, None
+                    if js.get("devices"): devices_found = True
+                    else: return None, None
             except json.JSONDecodeError:
                 continue
-        if not devices_found:
-            print("gpsd error: No GPS devices detected.")
-            return None, None
-        tpv_result = subprocess.run(
-            ['timeout', str(timeout), 'gpspipe', '-w', '-n', '10'],
-            capture_output=True, text=True, check=False
-        )
+        if not devices_found: return None, None
+        tpv_result = subprocess.run(['timeout', str(timeout), 'gpspipe', '-w', '-n', '10'], capture_output=True, text=True, check=False)
         if tpv_result.returncode == 124:
-            if debug:
-                print("gpsd warning: gpspipe timed out — no GPS fix received.")
+            if debug: pass
             return None, None
         elif tpv_result.returncode != 0:
-            print(f"gpspipe error: {tpv_result.stderr.strip() or tpv_result.returncode}")
             return None, None
         for line in tpv_result.stdout.splitlines():
             try:
@@ -232,114 +185,71 @@ def get_location_via_gpsd(timeout=5, debug=True):
                     return report['lat'], report['lon']
             except json.JSONDecodeError:
                 continue
-        if debug:
-            print("gpsd warning: No TPV fix found (GPS may not have lock).")
         return None, None
     except FileNotFoundError:
-        print("gpsd error: gpspipe not found — install gpsd-clients.")
         return None, None
 
 def get_location_via_google_geolocation(api_key):
     url = f"https://www.googleapis.com/geolocation/v1/geolocate?key={api_key}"
-    payload = {}
     try:
-        print("Fetching location via Google Geolocation API...")
-        response = requests.post(url, json=payload, timeout=15)
+        response = requests.post(url, json={}, timeout=15)
         response.raise_for_status()
         data = response.json()
         if 'location' in data and 'lat' in data['location'] and 'lng' in data['location']:
-            lat = data['location']['lat']
-            lon = data['location']['lng']
-            accuracy = data.get('accuracy', 'Unknown')
-            print(f"Location found: Lat {lat}, Lon {lon}, Accuracy: {accuracy}m")
-            return lat, lon
-        else:
-            print("Error: Location not found in Geolocation API response.")
-            print(f"Response: {data}")
-            return None, None
-    except requests.exceptions.RequestException as e:
-        print(f"Error fetching location from Google Geolocation API: {e}")
+            return data['location']['lat'], data['location']['lng']
         return None, None
-    except json.JSONDecodeError as e:
-        print(f"Error decoding JSON response from Google Geolocation API: {e}")
+    except requests.exceptions.RequestException:
         return None, None
-    except KeyError as e:
-        print(f"Error parsing Geolocation API response: Missing key {e}")
-        print(f"Response: {data}")
+    except json.JSONDecodeError:
+        return None, None
+    except KeyError:
         return None, None
 
 def get_location_via_openweathermap_geocoding(api_key, city_name):
-    if not city_name:
-        return None, None
+    if not city_name: return None, None
     url = f"http://api.openweathermap.org/geo/1.0/direct?q={city_name}&limit=1&appid={api_key}"
     try:
-        print(f"Fetching coordinates for {city_name} via OWM Geocoding...")
         response = requests.get(url, timeout=10)
         response.raise_for_status()
         data = response.json()
         if data and len(data) > 0:
-            lat = data[0]['lat']
-            lon = data[0]['lon']
-            print(f"Coordinates found for {city_name}: Lat {lat}, Lon {lon}")
-            return lat, lon
-        else:
-            print(f"Geocoding failed: City {city_name} not found.")
-            return None, None
-    except requests.exceptions.RequestException as e:
-        print(f"Error fetching coordinates for {city_name}: {e}")
+            return data[0]['lat'], data[0]['lon']
         return None, None
-    except (KeyError, IndexError) as e:
-        print(f"Error parsing geocoding response for {city_name}: {e}")
+    except requests.exceptions.RequestException:
+        return None, None
+    except (KeyError, IndexError):
         return None, None
 
 def get_cached_weather(lat, lon):
     cache_key = f"{lat:.2f}_{lon:.2f}"
     if cache_key in weather_cache:
         cached_data, timestamp = weather_cache[cache_key]
-        if time.time() - timestamp < 300:  # 5 minute cache
+        if time.time() - timestamp < 300:
             return cached_data
     return None
 
 def cache_weather(lat, lon, data):
-    cache_key = f"{lat:.2f}_{lon:.2f}"
-    weather_cache[cache_key] = (data, time.time())
+    weather_cache[f"{lat:.2f}_{lon:.2f}"] = (data, time.time())
 
 def get_weather_data_by_coords(api_key, lat, lon, units):
-    if lat is None or lon is None:
-        print("Cannot fetch weather: coordinates are invalid.")
-        return None
+    if lat is None or lon is None: return None
     cached = get_cached_weather(lat, lon)
-    if cached:
-        return cached
+    if cached: return cached
     url = f"http://api.openweathermap.org/data/2.5/weather?lat={lat}&lon={lon}&appid={api_key}&units={units}"
     try:
         response = requests.get(url, timeout=10)
         response.raise_for_status()
         data = response.json()
-        weather_info = {
-            "city": data["name"],
-            "country": data["sys"]["country"],
-            "temp": round(data["main"]["temp"]),
-            "feels_like": round(data["main"]["feels_like"]),
-            "description": data["weather"][0]["description"].title(),
-            "humidity": data["main"]["humidity"],
-            "pressure": data["main"]["pressure"],
-            "wind_speed": round(data["wind"]["speed"], 1),
-            "icon_id": data["weather"][0]["icon"],
-            "main": data["weather"][0]["main"].title()
-        }
-        cache_weather(lat, lon, weather_info)
-        return weather_info
-    except requests.exceptions.RequestException as e:
-        print(f"Error fetching weather data by coordinates: {e}")
+        weather_info_local = {"city": data["name"], "country": data["sys"]["country"], "temp": round(data["main"]["temp"]), "feels_like": round(data["main"]["feels_like"]), "description": data["weather"][0]["description"].title(), "humidity": data["main"]["humidity"], "pressure": data["main"]["pressure"], "wind_speed": round(data["wind"]["speed"], 1), "icon_id": data["weather"][0]["icon"], "main": data["weather"][0]["main"].title()}
+        cache_weather(lat, lon, weather_info_local)
+        return weather_info_local
+    except requests.exceptions.RequestException:
         return None
-    except KeyError as e:
-        print(f"Error parsing weather data by coordinates: {e}")
+    except KeyError:
         return None
 
 def get_contrasting_colors(img, n=2):
-    if img.mode != "RGB":
-        img = img.convert("RGB")
+    if img.mode != "RGB": img = img.convert("RGB")
     small_img = img.resize((50, 50), Image.LANCZOS)
     pixels = list(small_img.getdata())
     avg_r = sum(p[0] for p in pixels) // len(pixels)
@@ -350,12 +260,7 @@ def get_contrasting_colors(img, n=2):
     colors = []
     data_saturation = min(0.9, avg_s + 0.3)
     label_saturation = max(0.6, data_saturation - 0.2)
-    if avg_v < 0.3:
-        base_brightness = 0.9
-    elif avg_v > 0.7:
-        base_brightness = 0.8
-    else:
-        base_brightness = 0.85
+    base_brightness = 0.9 if avg_v < 0.3 else (0.8 if avg_v > 0.7 else 0.85)
     r1, g1, b1 = colorsys.hsv_to_rgb(opposite_h, data_saturation, base_brightness)
     colors.append((int(r1*255), int(g1*255), int(b1*255)))
     if n > 1:
@@ -375,8 +280,7 @@ def make_background_from_art(size, album_art_img):
                 r, g, b = bg.getpixel((x, y))
                 bg.putpixel((x, y), (int(r * factor), int(g * factor), int(b * factor)))
         return bg
-    if album_art_img.mode != "RGB":
-        album_art_img = album_art_img.convert("RGB")
+    if album_art_img.mode != "RGB": album_art_img = album_art_img.convert("RGB")
     small = album_art_img.resize((50, 50), Image.LANCZOS)
     pixels = list(small.getdata())
     r = sum(p[0] for p in pixels) // len(pixels)
@@ -406,21 +310,8 @@ def make_background_from_art(size, album_art_img):
     bg.paste(blurred_art, (art_x, 0), mask)
     return bg
 
-cached_background = None
-current_art_hash = None
-
 def get_cached_background(size, album_art_img):
-    global cached_background, current_art_hash
-    if album_art_img is None:
-        art_hash = None
-    else:
-        art_hash = hash(album_art_img.tobytes())
-    if art_hash != current_art_hash or cached_background is None:
-        cached_background = make_background_from_art(size, album_art_img)
-        current_art_hash = art_hash
-    return cached_background.copy()
-
-def get_cached_background(size, album_art_img):
+    global cached_background, current_art_hash, album_bg_cache
     if album_art_img is None:
         return Image.new("RGB", size, "black")
     img_hash = id(album_art_img)
@@ -433,21 +324,18 @@ def get_cached_background(size, album_art_img):
     return bg
 
 def get_background_path(weather_info):
-    global bg_map
     if not weather_info:
         candidate = "bg_default.png"
     else:
         main = weather_info.get('main', '').capitalize()
         candidate = bg_map.get(main, "bg_default.png")
-    full_path = os.path.join(BG_DIR, candidate)
-    if os.path.exists(full_path):
+    full_path = os.path.join(BG_DIR, candidate) if candidate else None
+    if full_path and os.path.exists(full_path):
         return candidate
-    else:
-        fallback_path = os.path.join(BG_DIR, "bg_default.png")
-        if os.path.exists(fallback_path):
-            return "bg_default.png"
-        else:
-            return None
+    fallback_path = os.path.join(BG_DIR, "bg_default.png")
+    if os.path.exists(fallback_path):
+        return "bg_default.png"
+    return None
 
 def draw_text_aliased(draw, image, position, text, font, fill):
     mask = Image.new("L", image.size, 0)
@@ -463,9 +351,7 @@ def draw_weather_image(weather_info):
         bg_path = os.path.join(BG_DIR, bg_filename)
         bg_img = get_cached_bg(bg_path, (SCREEN_WIDTH, SCREEN_HEIGHT))
         img.paste(bg_img, (0, 0))
-    else:
-        img = Image.new("RGB", (SCREEN_WIDTH, SCREEN_HEIGHT), "black")
-    draw = ImageDraw.Draw(img) 
+    draw = ImageDraw.Draw(img)
     if weather_info:
         text_elements = []
         title = f"{weather_info['city']}, {weather_info['country']}"
@@ -486,11 +372,8 @@ def draw_weather_image(weather_info):
         overlay_draw = ImageDraw.Draw(overlay)
         for text, position, font, color in text_elements:
             bbox = get_cached_text_bbox(text, font)
-            actual_bbox = (position[0] + bbox[0], position[1] + bbox[1], 
-                        position[0] + bbox[2], position[1] + bbox[3])
-            overlay_draw.rectangle([actual_bbox[0]-5, actual_bbox[1]-5, 
-                                actual_bbox[2]+5, actual_bbox[3]+5], 
-                                fill=(0, 0, 0, 200))
+            actual_bbox = (position[0] + bbox[0], position[1] + bbox[1], position[0] + bbox[2], position[1] + bbox[3])
+            overlay_draw.rectangle([actual_bbox[0]-5, actual_bbox[1]-5, actual_bbox[2]+5, actual_bbox[3]+5], fill=(0, 0, 0, 200))
         img = Image.alpha_composite(img.convert("RGBA"), overlay).convert("RGB")
         draw = ImageDraw.Draw(img)
         for text, position, font, color in text_elements:
@@ -502,9 +385,9 @@ def draw_weather_image(weather_info):
                 resp.raise_for_status()
                 icon_img = Image.open(BytesIO(resp.content)).convert("RGBA")
                 icon_img.thumbnail((128, 128), Image.LANCZOS)
-                img.paste(icon_img, (SCREEN_WIDTH - icon_img.size[0], SCREEN_HEIGHT - icon_img.size[1] - 40 ), icon_img)
-            except Exception as e:
-                print(f"Failed to load weather icon: {e}")
+                img.paste(icon_img, (SCREEN_WIDTH - icon_img.size[0], SCREEN_HEIGHT - icon_img.size[1] - 40), icon_img)
+            except Exception:
+                pass
         if TIME_DISPLAY:
             now = datetime.datetime.now().strftime("%H:%M")
             time_bbox = TEXT_METRICS['time']
@@ -543,47 +426,18 @@ def draw_weather_image(weather_info):
             draw_text_aliased(draw, img, (time_x, time_y), now, MEDIUM_FONT, "gray")
     return img
 
-def quantize_to_rgb565(r, g, b):
-    r = (r // 8) * 8
-    g = (g // 4) * 4
-    b = (b // 8) * 8
-    return r, g, b
-
-def display_image_on_framebuffer(image):
-    if image.mode != "RGB":
-        image = image.convert("RGB")
-    if image.size != (SCREEN_WIDTH, SCREEN_HEIGHT):
-        full_img = Image.new("RGB", (SCREEN_WIDTH, SCREEN_HEIGHT), "black")
-        full_img.paste(image, (0, 0))
-        image = full_img
-    arr = np.array(image, dtype=np.uint8)
-    r = _gamma_r[arr[:, :, 0]].astype(np.uint16)
-    g = _gamma_g[arr[:, :, 1]].astype(np.uint16)
-    b = _gamma_b[arr[:, :, 2]].astype(np.uint16)
-    rgb565 = (r << 11) | (g << 5) | b
-    output = np.empty((SCREEN_HEIGHT, SCREEN_WIDTH, 2), dtype=np.uint8)
-    output[:, :, 0] = rgb565 & 0xFF
-    output[:, :, 1] = (rgb565 >> 8) & 0xFF
-    with open(FB_DEVICE, "wb") as fb:
-        fb.write(output.tobytes())
-
 def update_spotify_layout(track_data):
     global spotify_layout_cache
     if not track_data:
         spotify_layout_cache = None
         return
-    fields = [
-        ("title", "Track  :", track_data.get("title", "")),
-        ("artists", "Artists:", track_data.get("artists", "")),
-        ("album", "Album:", track_data.get("album", ""))
-    ]
+    fields = [("title", "Track  :", track_data.get("title", "")), ("artists", "Artists:", track_data.get("artists", "")), ("album", "Album:", track_data.get("album", ""))]
     layout = []
     y = 5
     padding = 4
     x_offset = 5
     for key, label, data in fields:
-        if not data:
-            continue
+        if not data: continue
         label_bbox = get_cached_text_bbox(label, SPOT_MEDIUM_FONT)
         text_bbox = get_cached_text_bbox(data, SPOT_MEDIUM_FONT)
         label_width = label_bbox[2] - label_bbox[0]
@@ -592,18 +446,7 @@ def update_spotify_layout(track_data):
         field_height = max(label_bbox[3] - label_bbox[1], text_height) + padding * 2
         left_boundary = x_offset + label_width + 6
         visible_width = SCREEN_WIDTH - 5 - left_boundary
-        layout.append({
-            'key': key,
-            'label': label,
-            'data': data,
-            'y': y,
-            'field_height': field_height,
-            'label_width': label_width,
-            'text_width': text_width,
-            'left_boundary': left_boundary,
-            'visible_width': visible_width,
-            'needs_scroll': text_width > visible_width
-        })
+        layout.append({'key': key, 'label': label, 'data': data, 'y': y, 'field_height': field_height, 'label_width': label_width, 'text_width': text_width, 'left_boundary': left_boundary, 'visible_width': visible_width, 'needs_scroll': text_width > visible_width})
         y += field_height
     spotify_layout_cache = layout
 
@@ -615,7 +458,7 @@ def create_scrolling_text_image(text, font, color, total_width):
     return img
 
 def draw_spotify_image(spotify_track):
-    global album_art_image, album_bg_cache, artist_on_top
+    global album_art_image, artist_image, artist_on_top
     with art_lock:
         art_img = album_art_image
     img = get_cached_background((SCREEN_WIDTH, SCREEN_HEIGHT), art_img)
@@ -658,15 +501,11 @@ def draw_spotify_image(spotify_track):
             artist_img_to_draw = art_img_artist
         artist_pos_to_draw = int_artist_pos
     if artist_on_top:
-        if album_img_to_draw and album_pos:
-            img.paste(album_img_to_draw, album_pos)
-        if artist_img_to_draw and artist_pos_to_draw:
-            img.paste(artist_img_to_draw, artist_pos_to_draw)
+        if album_img_to_draw and album_pos: img.paste(album_img_to_draw, album_pos)
+        if artist_img_to_draw and artist_pos_to_draw: img.paste(artist_img_to_draw, artist_pos_to_draw)
     else:
-        if artist_img_to_draw and artist_pos_to_draw:
-            img.paste(artist_img_to_draw, artist_pos_to_draw)
-        if album_img_to_draw and album_pos:
-            img.paste(album_img_to_draw, album_pos)
+        if artist_img_to_draw and artist_pos_to_draw: img.paste(artist_img_to_draw, artist_pos_to_draw)
+        if album_img_to_draw and album_pos: img.paste(album_img_to_draw, album_pos)
     overlay = Image.new("RGBA", (SCREEN_WIDTH, SCREEN_HEIGHT), (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
     layout = spotify_layout_cache
@@ -713,12 +552,7 @@ def draw_spotify_image(spotify_track):
         background_height = time_height + 2 * padding
         time_x = 10
         time_y = SCREEN_HEIGHT - background_height - 10
-        draw.rectangle([
-            time_x, 
-            time_y, 
-            time_x + background_width, 
-            time_y + background_height
-        ], fill=(0, 0, 0, 200))
+        draw.rectangle([time_x, time_y, time_x + background_width, time_y + background_height], fill=(0, 0, 0, 200))
         text_x = time_x + padding
         text_y = time_y + padding - time_bbox[1]
         draw.text((text_x, text_y), time_text, fill=secondary_color, font=SPOT_LARGE_FONT)
@@ -732,74 +566,52 @@ def draw_spotify_image(spotify_track):
         background_height = time_height + 2 * padding
         time_x = SCREEN_WIDTH - background_width - 10
         time_y = SCREEN_HEIGHT - background_height - 10
-        draw.rectangle([
-            time_x, 
-            time_y, 
-            time_x + background_width, 
-            time_y + background_height
-        ], fill=(0, 0, 0, 170))
+        draw.rectangle([time_x, time_y, time_x + background_width, time_y + background_height], fill=(0, 0, 0, 170))
         text_x = time_x + padding
         text_y = time_y + padding - time_bbox[1]
         draw.text((text_x, text_y), now, fill=main_color, font=SPOT_LARGE_FONT)
     img = Image.alpha_composite(img.convert("RGBA"), overlay).convert("RGB")
     return img
 
-def weather_loop():
-    global START_SCREEN
-    global weather_info
-    lat, lon = None, None
-    if USE_GPSD:
-        lat, lon = get_location_via_gpsd(timeout=2)
-    if (lat is None or lon is None) and USE_GOOGLE_GEO:
-        lat, lon = get_location_via_google_geolocation(GOOGLE_GEO_API_KEY)
-    if lat is None or lon is None:
-        print("Initial geolocation failed; using fallback city.")
-        lat, lon = get_location_via_openweathermap_geocoding(OPENWEATHER_API_KEY, FALLBACK_CITY)
-        if lat is None or lon is None:
-            print(f"Error: Could not geocode fallback city '{FALLBACK_CITY}'. Weather will not update.")
+def create_fallback_art():
+    img = Image.new("RGB", (64, 64), (40, 40, 40))
+    draw = ImageDraw.Draw(img)
+    try:
+        draw.text((16, 16), "🎵", fill="white", font=SPOT_MEDIUM_FONT)
+    except:
+        draw.text((20, 20), "MUSIC", fill="white", font=SPOT_SMALL_FONT)
+    return img
+FALLBACK_ART = create_fallback_art()
+
+def fetch_and_store_artist_image(sp, artist_id):
+    global artist_image
+    try:
+        artist = sp.artist(artist_id)
+        images = artist.get('images', [])
+        url = None
+        for img in images:
+            if abs(img['width'] - 150) <= 20 and abs(img['height'] - 150) <= 20:
+                url = img['url']
+                break
+        if not url and images: url = images[-1]['url']
+        if not url:
+            with artist_image_lock: artist_image = None
             return
-    last_geo = time.time()
-    last_weather = 0
-    last_display_update = 0
-    last_cache_cleanup = time.time()
-    while not exit_event.is_set():
-        now = time.time()
-        if now - last_cache_cleanup > 300:
-            cleanup_caches()
-            last_cache_cleanup = now
-        if now - last_geo > GEO_UPDATE_INTERVAL:
-            new_lat, new_lon = None, None
-            if USE_GPSD:
-                new_lat, new_lon = get_location_via_gpsd(timeout=2)
-            if (new_lat is None or new_lon is None) and USE_GOOGLE_GEO:
-                new_lat, new_lon = get_location_via_google_geolocation(GOOGLE_GEO_API_KEY)
-            if new_lat is not None and new_lon is not None:
-                lat, lon = new_lat, new_lon
-            last_geo = now
-        if now - last_weather > UPDATE_INTERVAL_WEATHER:
-            new_weather = get_weather_data_by_coords(OPENWEATHER_API_KEY, lat, lon, "metric")
-            if new_weather is not None:
-                weather_info = new_weather
-            last_weather = now
-        if START_SCREEN == "weather" and now - last_display_update >= 1:
-            update_display()
-            last_display_update = now
-        time.sleep(0.5)
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        resp = requests.get(url, headers=headers, timeout=5)
+        resp.raise_for_status()
+        if 'image' not in resp.headers.get('content-type', '').lower(): raise ValueError("Not an image")
+        img = Image.open(BytesIO(resp.content)).convert("RGBA")
+        img = img.resize((100, 100), Image.LANCZOS)
+        with artist_image_lock: artist_image = img
+    except Exception:
+        with artist_image_lock: artist_image = None
 
 def spotify_loop():
-    global START_SCREEN
-    global spotify_track, sp, album_art_image
-    sp_oauth = SpotifyOAuth(
-        client_id=SPOTIFY_CLIENT_ID,
-        client_secret=SPOTIFY_CLIENT_SECRET,
-        redirect_uri=REDIRECT_URI,
-        scope=SCOPE,
-        cache_path=".spotify_cache"
-    )
+    global START_SCREEN, spotify_track, sp, album_art_image, scrolling_text_cache
+    sp_oauth = SpotifyOAuth(client_id=SPOTIFY_CLIENT_ID, client_secret=SPOTIFY_CLIENT_SECRET, redirect_uri=REDIRECT_URI, scope=SCOPE, cache_path=".spotify_cache")
     token_info = sp_oauth.get_cached_token()
-    if not token_info:
-        print("Spotify auth required; skipping for now.")
-        return
+    if not token_info: return
     def get_spotify_client():
         nonlocal token_info
         if sp_oauth.is_token_expired(token_info):
@@ -817,15 +629,11 @@ def spotify_loop():
             new_track = None
             art_url = None
             if not track or not track.get('item'):
-                global spotify_track, album_art_image, artist_image
                 spotify_track = None
-                with art_lock:
-                    album_art_image = None
-                with artist_image_lock:
-                    artist_image = None
+                with art_lock: album_art_image = None
+                with artist_image_lock: artist_image = None
                 update_spotify_layout(None)
-                if START_SCREEN == "spotify":
-                    update_display()
+                if START_SCREEN == "spotify": update_display()
                 last_track_id = None
                 time.sleep(SPOTIFY_UPDATE_INTERVAL)
                 continue
@@ -837,18 +645,10 @@ def spotify_loop():
                 album_str = item['album']['name'] if item.get('album') else "Unknown Album"
                 current_position = track.get('progress_ms', 0) // 1000
                 duration = item.get('duration_ms', 0) // 1000
-                new_track = {
-                    "title": item.get('name', "Unknown Track"),
-                    "artists": artist_str,
-                    "album": album_str,
-                    "current_position": current_position,
-                    "duration": duration,
-                    "is_playing": track.get('is_playing', False)
-                }
+                new_track = {"title": item.get('name', "Unknown Track"), "artists": artist_str, "album": album_str, "current_position": current_position, "duration": duration, "is_playing": track.get('is_playing', False)}
                 if item.get('album') and item['album'].get('images'):
                     art_url = item['album']['images'][0]['url']
             if current_id != last_track_id:
-                print(f"🎵 Track changed: {new_track['artists']} - {new_track['title']}")
                 spotify_track = new_track
                 if art_url != getattr(spotify_loop, 'last_art_url', None):
                     if art_url:
@@ -856,25 +656,20 @@ def spotify_loop():
                             headers = {'User-Agent': 'Mozilla/5.0'}
                             resp = requests.get(art_url, headers=headers, timeout=5)
                             resp.raise_for_status()
-                            if 'image' not in resp.headers.get('content-type', '').lower():
-                                raise ValueError("Not an image")
+                            if 'image' not in resp.headers.get('content-type', '').lower(): raise ValueError("Not an image")
                             img = Image.open(BytesIO(resp.content)).convert("RGB")
                             img.thumbnail((150, 150), Image.LANCZOS)
-                            with art_lock:
-                                album_art_image = img
+                            with art_lock: album_art_image = img
                             album_bg_cache.clear()
                             main_color, secondary_color = get_contrasting_colors(img)
                             spotify_track['main_color'] = main_color
                             spotify_track['secondary_color'] = secondary_color
-                        except Exception as e:
-                            print(f"❌ Artwork load error: {e}")
-                            with art_lock:
-                                album_art_image = None
+                        except Exception:
+                            with art_lock: album_art_image = None
                             spotify_track['main_color'] = (0, 255, 0)
                             spotify_track['secondary_color'] = (0, 255, 255)
                     else:
-                        with art_lock:
-                            album_art_image = None
+                        with art_lock: album_art_image = None
                         spotify_track['main_color'] = (0, 255, 0)
                         spotify_track['secondary_color'] = (0, 255, 255)
                     spotify_loop.last_art_url = art_url
@@ -888,7 +683,6 @@ def spotify_loop():
                             spotify_track['main_color'] = (0, 255, 0)
                             spotify_track['secondary_color'] = (0, 255, 255)
                 update_spotify_layout(spotify_track)
-                global scrolling_text_cache
                 scrolling_text_cache.clear()
                 main_color = spotify_track['main_color']
                 secondary_color = spotify_track['secondary_color']
@@ -897,10 +691,7 @@ def spotify_loop():
                     if data:
                         text_bbox = get_cached_text_bbox(data, SPOT_MEDIUM_FONT)
                         text_width = text_bbox[2] - text_bbox[0]
-                        label_bbox = get_cached_text_bbox(
-                            "Track:" if key == "title" else "Artists:" if key == "artists" else "Album:", 
-                            SPOT_MEDIUM_FONT
-                        )
+                        label_bbox = get_cached_text_bbox("Track:" if key == "title" else "Artists:" if key == "artists" else "Album:", SPOT_MEDIUM_FONT)
                         visible_width = SCREEN_WIDTH - 5 - (label_bbox[2] - label_bbox[0]) - 6
                         if text_width > visible_width:
                             scrolling_img = create_scrolling_text_image(data, SPOT_MEDIUM_FONT, main_color, text_width * 2 + 50)
@@ -916,22 +707,51 @@ def spotify_loop():
                     primary_artist_id = item['artists'][0]['id']
                     Thread(target=fetch_and_store_artist_image, args=(sp, primary_artist_id), daemon=True).start()
                 last_track_id = current_id
-                if START_SCREEN == "spotify":
-                    update_display()
+                if START_SCREEN == "spotify": update_display()
             else:
                 if spotify_track is not None:
                     spotify_track['current_position'] = track.get('progress_ms', 0) // 1000
                     spotify_track['is_playing'] = track.get('is_playing', False)
-        except Exception as e:
-            print(f"Spotify error: {e}")
+        except Exception:
             spotify_error_count += 1
             sleep_time = min(30, 2 ** spotify_error_count)
             time.sleep(sleep_time)
             spotify_track = None
             update_spotify_layout(None)
-            if START_SCREEN == "spotify":
-                update_display()
+            if START_SCREEN == "spotify": update_display()
         time.sleep(SPOTIFY_UPDATE_INTERVAL)
+
+def weather_loop():
+    global START_SCREEN, weather_info
+    lat, lon = None, None
+    if USE_GPSD: lat, lon = get_location_via_gpsd(timeout=2)
+    if (lat is None or lon is None) and USE_GOOGLE_GEO: lat, lon = get_location_via_google_geolocation(GOOGLE_GEO_API_KEY)
+    if lat is None or lon is None:
+        lat, lon = get_location_via_openweathermap_geocoding(OPENWEATHER_API_KEY, FALLBACK_CITY)
+        if lat is None or lon is None: return
+    last_geo = time.time()
+    last_weather = 0
+    last_display_update = 0
+    last_cache_cleanup = time.time()
+    while not exit_event.is_set():
+        now = time.time()
+        if now - last_cache_cleanup > 300:
+            cleanup_caches()
+            last_cache_cleanup = now
+        if now - last_geo > GEO_UPDATE_INTERVAL:
+            new_lat, new_lon = None, None
+            if USE_GPSD: new_lat, new_lon = get_location_via_gpsd(timeout=2)
+            if (new_lat is None or new_lon is None) and USE_GOOGLE_GEO: new_lat, new_lon = get_location_via_google_geolocation(GOOGLE_GEO_API_KEY)
+            if new_lat is not None and new_lon is not None: lat, lon = new_lat, new_lon
+            last_geo = now
+        if now - last_weather > UPDATE_INTERVAL_WEATHER:
+            new_weather = get_weather_data_by_coords(OPENWEATHER_API_KEY, lat, lon, "metric")
+            if new_weather is not None: weather_info = new_weather
+            last_weather = now
+        if START_SCREEN == "weather" and now - last_display_update >= 1:
+            update_display()
+            last_display_update = now
+        time.sleep(0.5)
 
 def animate_text_scroll():
     while not exit_event.is_set():
@@ -942,41 +762,10 @@ def animate_text_scroll():
                     state["offset"] += 2
                     if state["offset"] >= state["max_offset"]:
                         state["offset"] = 0
-        time.sleep(0.07)
-
-def fetch_and_store_artist_image(sp, artist_id):
-    global artist_image
-    try:
-        artist = sp.artist(artist_id)
-        images = artist.get('images', [])
-        url = None
-        for img in images:
-            if abs(img['width'] - 150) <= 20 and abs(img['height'] - 150) <= 20:
-                url = img['url']
-                break
-        if not url and images:
-            url = images[-1]['url']
-        if not url:
-            with artist_image_lock:
-                artist_image = None
-            return
-        headers = {'User-Agent': 'Mozilla/5.0'}
-        resp = requests.get(url, headers=headers, timeout=5)
-        resp.raise_for_status()
-        if 'image' not in resp.headers.get('content-type', '').lower():
-            raise ValueError("Not an image")
-        img = Image.open(BytesIO(resp.content)).convert("RGBA")
-        img = img.resize((100, 100), Image.LANCZOS)
-        with artist_image_lock:
-            artist_image = img
-    except Exception as e:
-        print(f"❌ Artist image load error: {e}")
-        with artist_image_lock:
-            artist_image = None
+        time.sleep(1/15)
 
 def animate_images():
-    global START_SCREEN
-    global art_pos, art_velocity, artist_pos, artist_velocity
+    global START_SCREEN, art_pos, art_velocity, artist_pos, artist_velocity, artist_on_top
     while not exit_event.is_set():
         needs_update = False
         with art_lock:
@@ -1019,48 +808,28 @@ def animate_images():
             with artist_image_lock:
                 artist_pos[:] = [new_x, new_y]
                 artist_velocity[:] = [new_dx, new_dy]
-            if bounced and random.random() < 0.3:
-                global artist_on_top
+            if bounced and random.random() < 0.5:
                 artist_on_top = not artist_on_top
                 needs_update = True
             needs_update = True
         if needs_update and START_SCREEN == "spotify":
             update_display()
+        time.sleep(1/60)
 
-def create_fallback_art():
-    img = Image.new("RGB", (64, 64), (40, 40, 40))
-    draw = ImageDraw.Draw(img)
-    try:
-        draw.text((16, 16), "🎵", fill="white", font=SPOT_MEDIUM_FONT)
-    except:
-        draw.text((20, 20), "MUSIC", fill="white", font=SPOT_SMALL_FONT)
-    return img
-
-FALLBACK_ART = create_fallback_art()
+def find_touchscreen():
+    for path in evdev.list_devices():
+        dev = evdev.InputDevice(path)
+        if "ADS7846" in dev.name or "Touchscreen" in dev.name: return dev
+    raise RuntimeError("Touchscreen not found")
 
 def handle_touch():
     global START_SCREEN
     device = find_touchscreen()
     for event in device.read_loop():
-        if exit_event.is_set():
-            break
+        if exit_event.is_set(): break
         if event.type == evdev.ecodes.EV_KEY and event.code == evdev.ecodes.BTN_TOUCH and event.value == 1:
             START_SCREEN = "spotify" if START_SCREEN == "weather" else "weather"
             update_display()
-
-def find_touchscreen():
-    for path in evdev.list_devices():
-        dev = evdev.InputDevice(path)
-        if "ADS7846" in dev.name or "Touchscreen" in dev.name:
-            return dev
-    raise RuntimeError("Touchscreen not found")
-
-def optimized_display_update():
-    global last_display_time
-    current_time = time.time()
-    if current_time - last_display_time >= MIN_DISPLAY_INTERVAL:
-        update_display()
-        last_display_time = current_time
 
 def update_display():
     global START_SCREEN
@@ -1075,7 +844,6 @@ def clear_framebuffer():
         f.write(b'\x00\x00' * SCREEN_AREA)
 
 def main():
-    print("Starting optimized dual-mode display. Touch to switch. Ctrl+C to quit.")
     Thread(target=weather_loop, daemon=True).start()
     Thread(target=spotify_loop, daemon=True).start()
     Thread(target=handle_touch, daemon=True).start()
