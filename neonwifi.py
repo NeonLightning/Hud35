@@ -1,10 +1,5 @@
 #!/usr/bin/env python3
-import subprocess
-import time
-import threading
-import os
-import signal
-import sys
+import subprocess, time, threading, os, signal, sys
 from flask import Flask, render_template_string, request, redirect, url_for
 
 sys.stdout.reconfigure(line_buffering=True)
@@ -156,7 +151,7 @@ dhcp-range=192.168.42.10,192.168.42.100,255.255.255.0,12h
         time.sleep(3)
         subprocess.Popen(['sudo', 'dnsmasq', '-C', DNSMASQ_CONF], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         time.sleep(2)
-        print(f"✅ Access point ready! Connect to '{AP_SSID}' at {AP_IP}")
+        print(f"✅ Connect to '{AP_SSID}' at http://{AP_IP}/ to configure WiFi")
     except Exception as e:
         print(f"❌ AP creation error: {e}")
         cleanup()

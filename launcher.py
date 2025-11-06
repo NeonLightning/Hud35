@@ -1,18 +1,7 @@
 #!/usr/bin/env python3
-import os
-import toml
 from flask import Flask, render_template_string, request, redirect, url_for, flash
 from spotipy.oauth2 import SpotifyOAuth
-import time
-import requests
-import subprocess
-import sys
-import signal
-import urllib.parse
-import socket
-import logging
-import threading
-import select
+import os, toml, time, requests, subprocess, sys, signal, urllib.parse, socket, logging, threading
 
 app = Flask(__name__)
 app.secret_key = 'hud35_setup_secret_key_change_in_production'
