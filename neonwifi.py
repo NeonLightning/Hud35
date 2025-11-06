@@ -7,6 +7,7 @@ import signal
 import sys
 from flask import Flask, render_template_string, request, redirect, url_for
 
+sys.stdout.reconfigure(line_buffering=True)
 app = Flask(__name__)
 
 WIFI_INTERFACE = "wlan0"

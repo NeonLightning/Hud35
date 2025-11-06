@@ -1,0 +1,995 @@
+#!/usr/bin/env python3
+import os
+import toml
+from flask import Flask, render_template_string, request, redirect, url_for, flash
+from spotipy.oauth2 import SpotifyOAuth
+import time
+import requests
+import subprocess
+import sys
+import signal
+import urllib.parse
+import socket
+import logging
+import threading
+import select
+
+app = Flask(__name__)
+app.secret_key = 'hud35_setup_secret_key_change_in_production'
+
+CONFIG_PATH = "config.toml"
+DEFAULT_CONFIG = {
+    "fonts": {
+        "large_font_path": "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "large_font_size": 36,
+        "medium_font_path": "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "medium_font_size": 24,
+        "small_font_path": "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "small_font_size": 16,
+        "spot_large_font_path": "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "spot_large_font_size": 26,
+        "spot_medium_font_path": "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "spot_medium_font_size": 18,
+        "spot_small_font_path": "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "spot_small_font_size": 12
+    },
+    "api_keys": {
+        "openweather": "",
+        "google_geo": "",
+        "client_id": "",
+        "client_secret": "",
+        "redirect_uri": "http://127.0.0.1:5000"
+    },
+    "settings": {
+        "start_screen": "weather",
+        "fallback_city": "",
+        "use_gpsd": True,
+        "use_google_geo": True,
+        "time_display": True
+    },
+    "auto_start": {
+        "auto_start_hud35": True,
+        "auto_start_neonwifi": True,
+        "check_internet": True
+    },
+    "ui": {
+        "theme": "dark"
+    }
+}
+
+hud35_process = None
+neonwifi_process = None
+
+def load_config():
+    if not os.path.exists(CONFIG_PATH):
+        with open(CONFIG_PATH, 'w') as f:
+            toml.dump(DEFAULT_CONFIG, f)
+        return DEFAULT_CONFIG.copy()
+    try:
+        with open(CONFIG_PATH, 'r') as f:
+            config = toml.load(f)
+            for section, values in DEFAULT_CONFIG.items():
+                if section not in config:
+                    config[section] = values.copy()
+                else:
+                    for key, value in values.items():
+                        if key not in config[section]:
+                            config[section][key] = value
+            return config
+    except Exception:
+        return DEFAULT_CONFIG.copy()
+
+def save_config(config):
+    with open(CONFIG_PATH, 'w') as f:
+        toml.dump(config, f)
+
+def setup_logging():
+    logging.getLogger('werkzeug').setLevel(logging.WARNING)
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.StreamHandler()
+        ]
+    )
+    return logging.getLogger('Launcher')
+
+def check_internet_connection(timeout=5):
+    try:
+        response = requests.get("http://www.google.com", timeout=timeout)
+        return response.status_code == 200
+    except requests.RequestException:
+        try:
+            import socket
+            socket.create_connection(("8.8.8.8", 53), timeout=timeout)
+            return True
+        except socket.error:
+            return False
+
+def wait_for_internet(timeout=60, check_interval=5):
+    logger = logging.getLogger('Launcher')
+    logger.info("🔍 Waiting for internet connection...")
+    start_time = time.time()
+    while time.time() - start_time < timeout:
+        if check_internet_connection():
+            logger.info("✅ Internet connection established")
+            return True
+        logger.info("⏳ No internet connection, waiting...")
+        time.sleep(check_interval)
+    logger.error("❌ Internet connection timeout")
+    return False
+
+def auto_launch_applications():
+    logger = logging.getLogger('Launcher')
+    config = load_config()
+    auto_config = config.get("auto_start", {})
+    logger.info("🔧 Auto-launching applications based on configuration...")
+    if auto_config.get("check_internet", True):
+        if not wait_for_internet(timeout=30):
+            logger.warning("❌ No internet - starting neonwifi if enabled")
+            if auto_config.get("auto_start_neonwifi", True):
+                start_neonwifi()
+            return
+    if auto_config.get("auto_start_neonwifi", True):
+        start_neonwifi()
+    if auto_config.get("auto_start_hud35", True):
+        spotify_authenticated, _ = check_spotify_auth()
+        config_ready = is_config_ready()
+        if config_ready and spotify_authenticated:
+            start_hud35()
+            logger.info("✅ HUD35 auto-started")
+        else:
+            logger.warning("⚠️ HUD35 not auto-started: configuration incomplete")
+
+def is_config_ready():
+    config = load_config()
+    return all([
+        config["api_keys"]["openweather"],
+        config["api_keys"]["client_id"], 
+        config["api_keys"]["client_secret"]
+    ])
+
+def check_spotify_auth():
+    config = load_config()
+    if not config["api_keys"]["client_id"] or not config["api_keys"]["client_secret"]:
+        return False, None
+    try:
+        if not os.path.exists(".spotify_cache"):
+            return False, None
+        sp_oauth = SpotifyOAuth(
+            client_id=config["api_keys"]["client_id"],
+            client_secret=config["api_keys"]["client_secret"],
+            redirect_uri=config["api_keys"]["redirect_uri"],
+            scope="user-read-currently-playing",
+            cache_path=".spotify_cache"
+        )
+        token_info = sp_oauth.get_cached_token()
+        if not token_info:
+            return False, None
+        if isinstance(token_info, dict):
+            access_token = token_info.get('access_token')
+        else:
+            access_token = token_info
+            
+        if not access_token:
+            return False, None
+        try:
+            headers = {
+                'Authorization': f'Bearer {access_token}',
+                'Content-Type': 'application/json'
+            }
+            response = requests.get('https://api.spotify.com/v1/me', headers=headers, timeout=5)
+            if response.status_code == 200:
+                return True, "Valid token"
+            else:
+                print(f"Token validation failed with status {response.status_code}")
+                return False, None
+        except Exception as e:
+            print(f"Token validation error: {e}")
+            return False, None
+    except Exception as e:
+        print(f"Error checking Spotify auth: {e}")
+        return False, None
+
+def is_hud35_running():
+    global hud35_process
+    if hud35_process is not None:
+        if hud35_process.poll() is None:
+            return True
+        else:
+            hud35_process = None
+    return False
+
+def is_neonwifi_running():
+    global neonwifi_process
+    if neonwifi_process is not None:
+        if neonwifi_process.poll() is None:
+            return True
+        else:
+            neonwifi_process = None
+    try:
+        result = subprocess.run(['pgrep', '-f', 'neonwifi.py'], 
+                            capture_output=True, text=True)
+        return bool(result.stdout.strip())
+    except Exception:
+        return False
+
+def start_hud35():
+    global hud35_process
+    logger = logging.getLogger('Launcher')
+    if is_hud35_running():
+        return False, "HUD35 is already running"
+    try:
+        hud35_process = subprocess.Popen(
+            [sys.executable, 'hud35.py'],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+            universal_newlines=True
+        )
+        def log_hud35_output():
+            for line in iter(hud35_process.stdout.readline, ''):
+                if line.strip():
+                    logger.info(f"[HUD35] {line.strip()}")
+        output_thread = threading.Thread(target=log_hud35_output)
+        output_thread.daemon = True
+        output_thread.start()
+        time.sleep(2)
+        if hud35_process.poll() is None:
+            return True, "HUD35 started successfully"
+        else:
+            return False, "HUD35 failed to start (check launcher.log for details)"
+    except Exception as e:
+        logger.error(f"Error starting HUD35: {str(e)}")
+        return False, f"Error starting HUD35: {str(e)}"
+
+def stop_hud35():
+    global hud35_process
+    logger = logging.getLogger('Launcher')
+    if not is_hud35_running():
+        return False, "HUD35 is not running"
+    try:
+        logger.info("Stopping HUD35...")
+        hud35_process.terminate()
+        try:
+            hud35_process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            hud35_process.kill()
+            hud35_process.wait()
+        hud35_process = None
+        logger.info("HUD35 stopped successfully")
+        return True, "HUD35 stopped successfully"
+    except Exception as e:
+        logger.error(f"Error stopping HUD35: {str(e)}")
+        return False, f"Error stopping HUD35: {str(e)}"
+
+def start_neonwifi():
+    global neonwifi_process
+    logger = logging.getLogger('Launcher')
+    if is_neonwifi_running():
+        return False, "neonwifi is already running"
+    try:
+        neonwifi_process = subprocess.Popen(
+            [sys.executable, 'neonwifi.py'],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+            universal_newlines=True
+        )
+        def log_neonwifi_output():
+            for line in iter(neonwifi_process.stdout.readline, ''):
+                if line.strip():
+                    logger.info(f"[neonwifi] {line.strip()}")
+        output_thread = threading.Thread(target=log_neonwifi_output)
+        output_thread.daemon = True
+        output_thread.start()
+        time.sleep(3)
+        if neonwifi_process.poll() is None:
+            return True, "neonwifi started successfully"
+        else:
+            return False, "neonwifi failed to start (check launcher.log for details)"
+    except Exception as e:
+        logger.error(f"Error starting neonwifi: {str(e)}")
+        return False, f"Error starting neonwifi: {str(e)}"
+
+
+def stop_neonwifi():
+    global neonwifi_process
+    logger = logging.getLogger('Launcher')
+    if not is_neonwifi_running():
+        return False, "neonwifi is not running"
+    try:
+        logger.info("Stopping neonwifi...")
+        if neonwifi_process:
+            neonwifi_process.terminate()
+            try:
+                neonwifi_process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                neonwifi_process.kill()
+                neonwifi_process.wait()
+            neonwifi_process = None
+        subprocess.run(['pkill', '-f', 'neonwifi.py'], check=False)
+        time.sleep(2)
+        logger.info("neonwifi stopped successfully")
+        return True, "neonwifi stopped successfully"
+    except Exception as e:
+        logger.error(f"Error stopping neonwifi: {str(e)}")
+        return False, f"Error stopping neonwifi: {str(e)}"
+
+SETUP_HTML = """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>HUD35 Launcher</title>
+    <style>
+        :root {
+            --bg-primary: #1a1a1a;
+            --bg-secondary: #2d2d2d;
+            --bg-tertiary: #3d3d3d;
+            --text-primary: #ffffff;
+            --text-secondary: #b0b0b0;
+            --accent-color: #007bff;
+            --accent-hover: #0056b3;
+            --border-color: #444444;
+            --success-bg: #155724;
+            --success-border: #c3e6cb;
+            --error-bg: #721c24;
+            --error-border: #f5c6cb;
+            --warning-bg: #856404;
+            --warning-border: #ffeaa7;
+            --info-bg: #004085;
+            --info-border: #b3d7ff;
+        }
+        [data-theme="light"] {
+            --bg-primary: #ffffff;
+            --bg-secondary: #f8f9fa;
+            --bg-tertiary: #e9ecef;
+            --text-primary: #212529;
+            --text-secondary: #6c757d;
+            --accent-color: #007bff;
+            --accent-hover: #0056b3;
+            --border-color: #dee2e6;
+            --success-bg: #d4edda;
+            --success-border: #c3e6cb;
+            --error-bg: #f8d7da;
+            --error-border: #f5c6cb;
+            --warning-bg: #fff3cd;
+            --warning-border: #ffeaa7;
+            --info-bg: #cce7ff;
+            --info-border: #b3d7ff;
+        }
+        body { 
+            font-family: Arial, sans-serif; 
+            max-width: 800px; 
+            margin: 0 auto; 
+            padding: 20px;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            transition: all 0.3s ease;
+        }
+        .container {
+            background: var(--bg-secondary);
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            border: 1px solid var(--border-color);
+        }
+        h1 { 
+            text-align: center; 
+            color: var(--text-primary);
+            margin-bottom: 30px;
+        }
+        .form-group { 
+            margin-bottom: 20px; 
+        }
+        label { 
+            display: block; 
+            margin-bottom: 5px; 
+            font-weight: bold;
+            color: var(--text-primary);
+        }
+        input[type="text"], input[type="password"], textarea, select { 
+            width: 100%; 
+            padding: 10px; 
+            border: 1px solid var(--border-color); 
+            border-radius: 5px; 
+            box-sizing: border-box;
+            font-size: 16px;
+            background: var(--bg-tertiary);
+            color: var(--text-primary);
+            transition: all 0.3s ease;
+        }
+        input[type="text"]:focus, input[type="password"]:focus, textarea:focus, select:focus {
+            border-color: var(--accent-color);
+            outline: none;
+        }
+        .section {
+            background: var(--bg-tertiary);
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 30px;
+            border-left: 4px solid var(--accent-color);
+            transition: all 0.3s ease;
+        }
+        .section h2 {
+            margin-top: 0;
+            color: var(--text-primary);
+        }
+        button { 
+            background: var(--accent-color); 
+            color: white; 
+            border: none; 
+            padding: 12px 20px; 
+            border-radius: 5px; 
+            cursor: pointer; 
+            font-size: 16px; 
+            width: 100%;
+            margin-top: 10px;
+            transition: all 0.3s ease;
+        }
+        button:hover { 
+            background: var(--accent-hover); 
+        }
+        .btn-secondary {
+            background: #6c757d;
+            margin-top: 5px;
+        }
+        .btn-success {
+            background: #28a745;
+            margin-top: 5px;
+        }
+        .btn-danger {
+            background: #dc3545;
+            margin-top: 5px;
+        }
+        .btn-warning {
+            background: #ffc107;
+            color: #212529;
+            margin-top: 5px;
+        }
+        .status {
+            padding: 10px;
+            border-radius: 5px;
+            margin: 10px 0;
+            text-align: center;
+            transition: all 0.3s ease;
+        }
+        .status.success { 
+            background: var(--success-bg); 
+            color: var(--text-primary); 
+            border: 1px solid var(--success-border);
+        }
+        .status.error { 
+            background: var(--error-bg); 
+            color: var(--text-primary); 
+            border: 1px solid var(--error-border);
+        }
+        .status.info { 
+            background: var(--info-bg); 
+            color: var(--text-primary); 
+            border: 1px solid var(--info-border);
+        }
+        .status.warning { 
+            background: var(--warning-bg); 
+            color: var(--text-primary); 
+            border: 1px solid var(--warning-border);
+        }
+        .app-controls {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin: 20px 0;
+        }
+        .control-panel {
+            background: var(--bg-secondary);
+            padding: 20px;
+            border-radius: 8px;
+            border: 1px solid var(--border-color);
+            transition: all 0.3s ease;
+        }
+        .control-panel h3 {
+            margin-top: 0;
+            color: var(--text-primary);
+            border-bottom: 2px solid var(--accent-color);
+            padding-bottom: 10px;
+        }
+        .toggle-switch {
+            display: flex;
+            align-items: center;
+            margin: 10px 0;
+        }
+        .toggle-switch input[type="checkbox"] {
+            margin-right: 10px;
+            transform: scale(1.2);
+        }
+        .toggle-switch label {
+            color: var(--text-primary);
+        }
+        .app-status {
+            text-align: center;
+            padding: 15px;
+            margin: 10px 0;
+            border-radius: 8px;
+            background: var(--bg-secondary);
+            border: 2px solid var(--border-color);
+            transition: all 0.3s ease;
+        }
+        .app-status.running {
+            background: var(--success-bg);
+            border-color: var(--success-border);
+            color: var(--text-primary);
+        }
+        .app-status.stopped {
+            background: var(--error-bg);
+            border-color: var(--error-border);
+            color: var(--text-primary);
+        }
+        .instructions {
+            background: var(--info-bg);
+            padding: 15px;
+            border-radius: 5px;
+            margin-bottom: 15px;
+            font-size: 14px;
+            color: var(--text-primary);
+            border: 1px solid var(--info-border);
+        }
+        .instructions a {
+            color: var(--text-primary);
+            text-decoration: underline;
+        }
+        .theme-toggle {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background: var(--accent-color);
+            color: white;
+            border: none;
+            padding: 8px 12px;
+            border-radius: 20px;
+            cursor: pointer;
+            font-size: 12px;
+            z-index: 1000;
+            width: auto;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+            transition: all 0.3s ease;
+        }
+        .theme-toggle:hover {
+            background: var(--accent-hover);
+            transform: scale(1.05);
+        }
+        small {
+            color: var(--text-secondary);
+        }
+        .settings-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+        .save-all-button {
+            background: #28a745;
+            font-size: 18px;
+            padding: 15px;
+            margin-top: 30px;
+        }
+    </style>
+</head>
+<body data-theme="{{ ui_config.theme }}">
+    <button class="theme-toggle" onclick="toggleTheme()">
+        {% if ui_config.theme == 'dark' %}
+        ☀️
+        {% else %}
+        🌙
+        {% endif %}
+    </button>
+    <div class="container">
+        <h1>HUD35 Launcher</h1>
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="status {{ category }}">{{ message }}</div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+        <div class="app-controls">
+            <div class="control-panel">
+                <h3>HUD35 Display</h3>
+                <div class="app-status {% if hud35_running %}running{% else %}stopped{% endif %}">
+                    Status: {% if hud35_running %}✅ RUNNING{% else %}❌ STOPPED{% endif %}
+                </div>
+                {% if hud35_running %}
+                <form method="POST" action="/stop_hud35">
+                    <button type="submit" class="btn-danger">🛑 Stop HUD35</button>
+                </form>
+                {% else %}
+                <form method="POST" action="/start_hud35">
+                    <button type="submit" class="btn-success">🚀 Start HUD35</button>
+                </form>
+                {% endif %}
+            </div>
+            <div class="control-panel">
+                <h3>WiFi Manager</h3>
+                <div class="app-status {% if neonwifi_running %}running{% else %}stopped{% endif %}">
+                    Status: {% if neonwifi_running %}✅ RUNNING{% else %}❌ STOPPED{% endif %}
+                </div>
+                {% if neonwifi_running %}
+                <form method="POST" action="/stop_neonwifi">
+                    <button type="submit" class="btn-danger">🛑 Stop WiFi Manager</button>
+                </form>
+                {% else %}
+                <form method="POST" action="/start_neonwifi">
+                    <button type="submit" class="btn-success">🚀 Start WiFi Manager</button>
+                </form>
+                {% endif %}
+            </div>
+        </div>
+        <form method="POST" action="/save_all_config">
+            <div class="section">
+                <h2>🔑 API Configuration</h2>
+                <div class="instructions">
+                    <p><strong>Get your API keys:</strong></p>
+                    <p>• <a href="https://openweathermap.org/api" target="_blank">OpenWeatherMap</a> - Free weather API</p>
+                    <p>• <a href="https://developers.google.com/maps/documentation/geolocation" target="_blank">Google Geolocation API</a> - Optional, for precise location</p>
+                    <p>• <a href="https://developer.spotify.com/dashboard" target="_blank">Spotify Developer Dashboard</a> - For music integration</p>
+                </div>
+                <div class="settings-grid">
+                    <div>
+                        <h3>Weather APIs</h3>
+                        <div class="form-group">
+                            <label for="openweather">OpenWeatherMap API Key:</label>
+                            <input type="text" id="openweather" name="openweather" value="{{ config.api_keys.openweather }}" placeholder="Enter your OpenWeatherMap API key">
+                        </div>
+                        <div class="form-group">
+                            <label for="google_geo">Google Geolocation API Key:</label>
+                            <input type="text" id="google_geo" name="google_geo" value="{{ config.api_keys.google_geo }}" placeholder="Enter Google Geolocation API key">
+                            <small>Optional - for precise location without GPS</small>
+                        </div>
+                    </div>
+                    <div>
+                        <h3>Spotify API</h3>
+                        {% if spotify_configured %}
+                            {% if spotify_authenticated %}
+                            <div class="status success">
+                                <p>✅ Spotify is authenticated!</p>
+                            </div>
+                            {% else %}
+                            <div class="status warning">
+                                <p>⚠️ Spotify credentials saved but not authenticated.</p>
+                                <a href="/spotify_auth">
+                                    <button type="button" class="btn-warning">🔑 Authenticate Spotify</button>
+                                </a>
+                            </div>
+                            {% endif %}
+                        {% endif %}
+                        <div class="form-group">
+                            <label for="client_id">Spotify Client ID:</label>
+                            <input type="text" id="client_id" name="client_id" value="{{ config.api_keys.client_id }}" placeholder="Enter your Spotify Client ID">
+                        </div>
+                        <div class="form-group">
+                            <label for="client_secret">Spotify Client Secret:</label>
+                            <input type="password" id="client_secret" name="client_secret" value="{{ config.api_keys.client_secret }}" placeholder="Enter your Spotify Client Secret">
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="section">
+                <h2>📍 Location & Display Settings</h2>
+                <div class="settings-grid">
+                    <div>
+                        <h3>Location Services</h3>
+                        <div class="form-group">
+                            <label for="fallback_city">Fallback City:</label>
+                            <input type="text" id="fallback_city" name="fallback_city" value="{{ config.settings.fallback_city }}" placeholder="e.g., London,UK">
+                            <small>Used when location services are unavailable</small>
+                        </div>
+                        <div class="toggle-switch">
+                            <input type="checkbox" id="use_gpsd" name="use_gpsd" {% if config.settings.use_gpsd %}checked{% endif %}>
+                            <label for="use_gpsd">Use GPSD for location</label>
+                            <small style="display: block; margin-left: 25px; color: var(--text-secondary);">(Requires GPS hardware and gpsd service)</small>
+                        </div>
+                        <div class="toggle-switch">
+                            <input type="checkbox" id="use_google_geo" name="use_google_geo" {% if config.settings.use_google_geo %}checked{% endif %}>
+                            <label for="use_google_geo">Use Google Geolocation</label>
+                            <small style="display: block; margin-left: 25px; color: var(--text-secondary);">(More accurate than IP-based location)</small>
+                        </div>
+                    </div>
+                    <div>
+                        <h3>Display Settings</h3>
+                        <div class="form-group">
+                            <label for="start_screen">Start Screen:</label>
+                            <select id="start_screen" name="start_screen">
+                                <option value="weather" {% if config.settings.start_screen == "weather" %}selected{% endif %}>Weather</option>
+                                <option value="spotify" {% if config.settings.start_screen == "spotify" %}selected{% endif %}>Spotify</option>
+                            </select>
+                        </div>
+                        <div class="toggle-switch">
+                            <input type="checkbox" id="time_display" name="time_display" {% if config.settings.time_display %}checked{% endif %}>
+                            <label for="time_display">Show time display</label>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="section">
+                <h2>⚡ Auto-start Configuration</h2>
+                <div class="toggle-switch">
+                    <input type="checkbox" id="auto_start_hud35" name="auto_start_hud35" {% if auto_config.auto_start_hud35 %}checked{% endif %}>
+                    <label for="auto_start_hud35">Auto-start HUD35 Display on boot</label>
+                </div>
+                <div class="toggle-switch">
+                    <input type="checkbox" id="auto_start_neonwifi" name="auto_start_neonwifi" {% if auto_config.auto_start_neonwifi %}checked{% endif %}>
+                    <label for="auto_start_neonwifi">Auto-start WiFi Manager on boot</label>
+                </div>
+                <div class="toggle-switch">
+                    <input type="checkbox" id="check_internet" name="check_internet" {% if auto_config.check_internet %}checked{% endif %}>
+                    <label for="check_internet">Wait for internet connection before starting Hud35</label>
+                </div>
+            </div>
+            <button type="submit" class="save-all-button">💾 Save All Settings</button>
+        </form>
+    </div>
+    <script>
+        function toggleTheme() {
+            const currentTheme = document.body.getAttribute('data-theme');
+            const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+            document.body.setAttribute('data-theme', newTheme);
+            const button = document.querySelector('.theme-toggle');
+            button.innerHTML = newTheme === 'dark' ? '☀️' : '🌙';
+            const form = document.createElement('form');
+            form.method = 'POST';
+            form.action = '/toggle_theme';
+            const themeInput = document.createElement('input');
+            themeInput.type = 'hidden';
+            themeInput.name = 'theme';
+            themeInput.value = newTheme;
+            form.appendChild(themeInput);
+            document.body.appendChild(form);
+            form.submit();
+        }
+        document.addEventListener('DOMContentLoaded', function() {
+            const savedTheme = '{{ ui_config.theme }}' || 'dark';
+            document.body.setAttribute('data-theme', savedTheme);
+            const button = document.querySelector('.theme-toggle');
+            button.innerHTML = savedTheme === 'dark' ? '☀️' : '🌙';
+        });
+    </script>
+</body>
+</html>
+"""
+
+@app.route('/')
+def index():
+    config = load_config()
+    auto_config = config.get("auto_start", {})
+    ui_config = config.get("ui", {"theme": "dark"}) 
+    config_ready = is_config_ready()
+    spotify_configured = bool(config["api_keys"]["client_id"] and config["api_keys"]["client_secret"])
+    spotify_authenticated, _ = check_spotify_auth()
+    hud35_running = is_hud35_running()
+    neonwifi_running = is_neonwifi_running()
+    return render_template_string(
+        SETUP_HTML, 
+        config=config, 
+        config_ready=config_ready,
+        spotify_configured=spotify_configured,
+        spotify_authenticated=spotify_authenticated,
+        hud35_running=hud35_running,
+        neonwifi_running=neonwifi_running,
+        auto_config=auto_config,
+        ui_config=ui_config
+    )
+
+@app.route('/toggle_theme', methods=['POST'])
+def toggle_theme():
+    config = load_config()
+    new_theme = request.form.get('theme', 'dark')
+    if 'ui' not in config:
+        config['ui'] = {}
+    config['ui']['theme'] = new_theme
+    save_config(config)
+    return redirect(url_for('index'))
+
+@app.route('/save_all_config', methods=['POST'])
+def save_all_config():
+    config = load_config()
+    config["api_keys"]["openweather"] = request.form.get('openweather', '')
+    config["api_keys"]["google_geo"] = request.form.get('google_geo', '')
+    config["api_keys"]["client_id"] = request.form.get('client_id', '')
+    config["api_keys"]["client_secret"] = request.form.get('client_secret', '')
+    config["settings"]["fallback_city"] = request.form.get('fallback_city', '')
+    config["settings"]["start_screen"] = request.form.get('start_screen', 'weather')
+    config["settings"]["use_gpsd"] = 'use_gpsd' in request.form
+    config["settings"]["use_google_geo"] = 'use_google_geo' in request.form
+    config["settings"]["time_display"] = 'time_display' in request.form
+    config["auto_start"] = {
+        "auto_start_hud35": 'auto_start_hud35' in request.form,
+        "auto_start_neonwifi": 'auto_start_neonwifi' in request.form,
+        "check_internet": 'check_internet' in request.form
+    }
+    save_config(config)
+    flash('success', 'All settings saved successfully!')
+    return redirect(url_for('index'))
+
+@app.route('/start_hud35', methods=['POST'])
+def start_hud35_route():
+    success, message = start_hud35()
+    if success:
+        flash('success', message)
+    else:
+        flash('error', message)
+    return redirect(url_for('index'))
+
+@app.route('/stop_hud35', methods=['POST'])
+def stop_hud35_route():
+    success, message = stop_hud35()
+    if success:
+        flash('success', message)
+    else:
+        flash('error', message)
+    return redirect(url_for('index'))
+
+@app.route('/start_neonwifi', methods=['POST'])
+def start_neonwifi_route():
+    success, message = start_neonwifi()
+    if success:
+        flash('success', message)
+    else:
+        flash('error', message)
+    return redirect(url_for('index'))
+
+@app.route('/stop_neonwifi', methods=['POST'])
+def stop_neonwifi_route():
+    success, message = stop_neonwifi()
+    if success:
+        flash('success', message)
+    else:
+        flash('error', message)
+    return redirect(url_for('index'))
+
+@app.route('/spotify_auth')
+def spotify_auth_page():
+    config = load_config()
+    if not config["api_keys"]["client_id"] or not config["api_keys"]["client_secret"]:
+        flash('error', 'Please save Spotify Client ID and Secret first.')
+        return redirect(url_for('index'))
+    try:
+        sp_oauth = SpotifyOAuth(
+            client_id=config["api_keys"]["client_id"],
+            client_secret=config["api_keys"]["client_secret"],
+            redirect_uri=config["api_keys"]["redirect_uri"],
+            scope="user-read-currently-playing",
+            cache_path=".spotify_cache",
+            show_dialog=True
+        )
+        auth_url = sp_oauth.get_authorize_url()
+        return f"""
+        <div style="max-width: 600px; margin: 50px auto; padding: 20px; font-family: Arial;">
+            <h2>Spotify Authentication</h2>
+            <p>Visit this URL to authenticate:</p>
+            <div style="background: #f5f5f5; padding: 15px; border-radius: 5px; word-break: break-all;">
+                {auth_url}
+            </div>
+            <p><a href="{auth_url}" target="_blank">Click here to open</a></p>
+            <p>After authenticating, you'll be redirected. Copy the URL and paste it below:</p>
+            <form method="POST" action="/process_callback_url">
+                <textarea name="callback_url" placeholder="Paste the callback URL here..." style="width: 100%; height: 100px; margin: 10px 0;"></textarea>
+                <button type="submit">Process Authentication</button>
+            </form>
+            <p><a href="/">← Back to setup</a></p>
+        </div>
+        """
+    except Exception as e:
+        flash('error', f'Spotify authentication error: {str(e)}')
+        return redirect(url_for('index'))
+
+@app.route('/process_callback_url', methods=['POST'])
+def process_callback_url():
+    config = load_config()
+    callback_url = request.form.get('callback_url', '').strip()
+    if not callback_url:
+        flash('error', 'Please paste the callback URL')
+        return redirect(url_for('spotify_auth_page'))
+    try:
+        parsed_url = urllib.parse.urlparse(callback_url)
+        query_params = urllib.parse.parse_qs(parsed_url.query)
+        if 'error' in query_params:
+            error = query_params['error'][0]
+            flash('error', f'Spotify authentication failed: {error}')
+            return redirect(url_for('index'))
+        if 'code' not in query_params:
+            flash('error', 'No authorization code found in the URL.')
+            return redirect(url_for('spotify_auth_page'))
+        code = query_params['code'][0]
+        sp_oauth = SpotifyOAuth(
+            client_id=config["api_keys"]["client_id"],
+            client_secret=config["api_keys"]["client_secret"],
+            redirect_uri=config["api_keys"]["redirect_uri"],
+            scope="user-read-currently-playing",
+            cache_path=".spotify_cache"
+        )
+        token_info = sp_oauth.get_access_token(code)
+        if token_info:
+            flash('success', 'Spotify authentication successful!')
+        else:
+            flash('error', 'Spotify authentication failed.')
+    except Exception as e:
+        flash('error', f'Authentication error: {str(e)}')
+        if os.path.exists(".spotify_cache"):
+            os.remove(".spotify_cache")
+    return redirect(url_for('index'))
+
+def cleanup():
+    logger = logging.getLogger('Launcher')
+    global hud35_process, neonwifi_process
+    logger.info("🧹 Performing cleanup...")
+    if is_hud35_running():
+        stop_hud35()
+    if is_neonwifi_running():
+        stop_neonwifi()
+
+def signal_handler(sig, frame):
+    logger = logging.getLogger('Launcher')
+    logger.info("")
+    logger.info("Shutting down launcher...")
+    cleanup()
+    sys.exit(0)
+
+def main():
+    logger = setup_logging()
+    logger.info("🚀 Starting HUD35 Launcher")
+    def get_lan_ips():
+        ips = []
+        try:
+            hostname = socket.gethostname()
+            all_ips = socket.getaddrinfo(hostname, None)
+            for addr_info in all_ips:
+                ip = addr_info[4][0]
+                if '.' in ip and not ip.startswith('127.'):
+                    ips.append(ip)
+            try:
+                with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+                    s.connect(("8.8.8.8", 80))
+                    local_ip = s.getsockname()[0]
+                    if local_ip not in ips and not local_ip.startswith('127.'):
+                        ips.append(local_ip)
+            except:
+                pass
+        except Exception as e:
+            logger.warning(f"Could not determine LAN IP: {e}")
+        return list(set(ips))
+    lan_ips = get_lan_ips()
+    auto_launch_applications()
+    if lan_ips:
+        for ip in lan_ips:
+            logger.info(f"📍 Web UI available at: http://{ip}:5000")
+    else:
+        logger.info("📍 Web UI available at: http://127.0.0.1:5000")
+        logger.info("   (Could not detect LAN IP - using localhost)")
+    logger.info("⏹️  Press Ctrl+C to stop the launcher")
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+    try:
+        sys.stdout = open(os.devnull, 'w')
+        sys.stderr = open(os.devnull, 'w')
+        app.run(host='0.0.0.0', port=5000, debug=False, use_reloader=False)
+    except OSError as e:
+        if "Address already in use" in str(e):
+            logger.info("Port 5000 busy, trying port 5001...")
+            if lan_ips:
+                for ip in lan_ips:
+                    logger.info(f"📍 Web UI available at: http://{ip}:5001")
+            else:
+                logger.info("📍 Web UI available at: http://127.0.0.1:5001")
+            sys.stdout = open(os.devnull, 'w')
+            sys.stderr = open(os.devnull, 'w')
+            app.run(host='0.0.0.0', port=5001, debug=False, use_reloader=False)
+        else:
+            raise
+
+if __name__ == '__main__':
+    try:
+        main()
+    except KeyboardInterrupt:
+        signal_handler(signal.SIGINT, None)
+    finally:
+        cleanup()

@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-import time, requests, json, evdev, spotipy, colorsys, datetime, os, subprocess, toml, random
+import time, requests, json, evdev, spotipy, colorsys, datetime, os, subprocess, toml, random, sys
 import numpy as np
 from io import BytesIO
 from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageEnhance
 from threading import Thread, Event, RLock
 from spotipy.oauth2 import SpotifyOAuth
 
+sys.stdout.reconfigure(line_buffering=True) 
 FB_DEVICE = "/dev/fb1"
 SCREEN_WIDTH = 480
 SCREEN_HEIGHT = 320
@@ -39,7 +40,7 @@ DEFAULT_CONFIG = {
         "google_geo": "",
         "client_id": "",
         "client_secret": "",
-        "redirect_uri": "http://127.0.0.1:8080"
+        "redirect_uri": "http://127.0.0.1:5000"
     },
     "settings": {
         "start_screen": "weather",
@@ -90,11 +91,12 @@ USE_GPSD = config["settings"]["use_gpsd"]
 USE_GOOGLE_GEO = config["settings"]["use_google_geo"]
 TIME_DISPLAY = config["settings"]["time_display"]
 GAMMA = 1.5
+MIN_DISPLAY_INTERVAL = 0.001
+TEXT_METRICS = {}
 
 _gamma_r = np.array([int(((i / 255.0) ** (1 / GAMMA)) * 31 + 0.5) for i in range(256)], dtype=np.uint8)
 _gamma_g = np.array([int(((i / 255.0) ** (1 / GAMMA)) * 63 + 0.5) for i in range(256)], dtype=np.uint8)
 _gamma_b = np.array([int(((i / 255.0) ** (1 / GAMMA)) * 31 + 0.5) for i in range(256)], dtype=np.uint8)
-
 weather_info = None
 spotify_track = None
 sp = None
@@ -110,13 +112,90 @@ artist_on_top = False
 spotify_layout_cache = None
 scrolling_text_cache = {}
 last_display_time = 0
-MIN_DISPLAY_INTERVAL = 0.001
-TEXT_METRICS = {}
 
 def init_text_metrics():
     global TEXT_METRICS
     TEXT_METRICS = {'time': MEDIUM_FONT.getbbox("00:00"), 'temp_large': LARGE_FONT.getbbox("000°C"), 'feels_like': MEDIUM_FONT.getbbox("Feels like: 000°C"), 'humidity': SMALL_FONT.getbbox("Humidity: 100%"), 'pressure': SMALL_FONT.getbbox("Pressure: 1000 hPa"), 'wind': SMALL_FONT.getbbox("Wind: 00.0 m/s")}
 init_text_metrics()
+
+def check_configuration():
+    config = load_config()
+    missing_keys = []
+    if not config["api_keys"]["openweather"]:
+        missing_keys.append("OpenWeatherMap API key")
+    if not config["api_keys"]["client_id"]:
+        missing_keys.append("Spotify Client ID")
+    if not config["api_keys"]["client_secret"]:
+        missing_keys.append("Spotify Client Secret")
+    if missing_keys:
+        print("\n" + "="*60)
+        print("HUD35 Configuration Required")
+        print("="*60)
+        print("The following configuration is missing:")
+        for key in missing_keys:
+            print(f"  - {key}")
+        print(f"\nPlease run the setup server:")
+        print(f"  python3 setup.py")
+        print(f"Then visit: http://localhost:5000")
+        print("="*60)
+        if os.path.exists("setup.py"):
+            response = input("\nStart setup server now? (y/n): ")
+            if response.lower() in ['y', 'yes']:
+                print("Starting setup server...")
+                try:
+                    subprocess.run([sys.executable, "setup.py"])
+                except Exception as e:
+                    print(f"Failed to start setup server: {e}")
+        else:
+            print("\nSetup script not found. Please create setup.py")
+        
+        sys.exit(1)
+    sp_oauth = SpotifyOAuth(
+        client_id=config["api_keys"]["client_id"],
+        client_secret=config["api_keys"]["client_secret"],
+        redirect_uri=config["api_keys"]["redirect_uri"],
+        scope="user-read-currently-playing",
+        cache_path=".spotify_cache"
+    )
+    token_info = sp_oauth.get_cached_token()
+    if not token_info:
+        print("\n" + "="*60)
+        print("Spotify Authentication Required")
+        print("="*60)
+        print("Spotify credentials are configured but not authenticated.")
+        print(f"Please visit: http://localhost:5000/spotify_auth")
+        print("="*60)
+        if os.path.exists("setup.py"):
+            response = input("\nOpen authentication page now? (y/n): ")
+            if response.lower() in ['y', 'yes']:
+                print("Starting setup server for authentication...")
+                try:
+                    import threading
+                    def start_auth_server():
+                        subprocess.run([sys.executable, "setup.py"])
+                    auth_thread = threading.Thread(target=start_auth_server, daemon=True)
+                    auth_thread.start()
+                    time.sleep(3)
+                    try:
+                        import webbrowser
+                        webbrowser.open("http://localhost:5000/spotify_auth")
+                    except:
+                        print("Please open http://localhost:5000/spotify_auth in your browser")
+                    
+                    input("Press Enter after completing Spotify authentication...")
+                except Exception as e:
+                    print(f"Failed to start auth server: {e}")
+        sys.exit(1)
+
+def setup_spotify_oauth():
+    config = load_config()
+    return SpotifyOAuth(
+        client_id=config["api_keys"]["client_id"],
+        client_secret=config["api_keys"]["client_secret"],
+        redirect_uri=config["api_keys"]["redirect_uri"],
+        scope=SCOPE,
+        cache_path=".spotify_cache"
+    )
 
 def get_cached_bg(bg_path, size):
     key = (bg_path, size)
@@ -609,39 +688,81 @@ def fetch_and_store_artist_image(sp, artist_id):
 
 def spotify_loop():
     global START_SCREEN, spotify_track, sp, album_art_image, scrolling_text_cache
-    sp_oauth = SpotifyOAuth(
-        client_id=SPOTIFY_CLIENT_ID,
-        client_secret=SPOTIFY_CLIENT_SECRET,
-        redirect_uri=REDIRECT_URI,
-        scope=SCOPE,
-        cache_path=".spotify_cache"
-    )
+    sp_oauth = setup_spotify_oauth()
     token_info = sp_oauth.get_cached_token()
     if not token_info:
-        print("Spotify auth required; skipping for now.")
+        print("Spotify not authenticated. Please run setup to authenticate.")
+        spotify_track = {
+            "title": "Spotify Not Configured",
+            "artists": "Run setup.py to authenticate",
+            "album": "HUD35 Setup Required",
+            "current_position": 0,
+            "duration": 1,
+            "is_playing": False,
+            "main_color": (255, 0, 0),
+            "secondary_color": (200, 0, 0)
+        }
+        update_spotify_layout(spotify_track)
+        if START_SCREEN == "spotify":
+            update_display()
         return
     def get_spotify_client():
         nonlocal token_info
-        if not isinstance(token_info, dict):
-            token_info = {
-                'access_token': token_info,
-                'token_type': 'Bearer',
-                'expires_in': 3600,
-                'scope': SCOPE,
-                'expires_at': time.time() + 3600
-            }
-        if sp_oauth.is_token_expired(token_info):
+        current_token = sp_oauth.get_cached_token()
+        if not current_token:
+            print("❌ No cached token found. Re-authentication required.")
+            return None
+        if isinstance(current_token, dict):
+            token_info = current_token
+            access_token = token_info.get('access_token')
+            expires_at = token_info.get('expires_at', 0)
+        else:
+            access_token = current_token
+            expires_at = time.time() + 3600
+        if isinstance(token_info, dict) and expires_at and time.time() > expires_at - 60:
             try:
                 if 'refresh_token' in token_info:
-                    print("Refreshing access token...")
-                    token_info = sp_oauth.refresh_access_token(token_info['refresh_token'])
+                    print("Refreshing Spotify access token...")
+                    new_token_info = sp_oauth.refresh_access_token(token_info['refresh_token'])
+                    if isinstance(new_token_info, dict):
+                        token_info = new_token_info
+                        access_token = token_info.get('access_token')
+                    else:
+                        access_token = new_token_info
+                    print("✅ Spotify token refreshed successfully")
                 else:
-                    print("No refresh token available.")
+                    print("❌ No refresh token available. Re-authentication required.")
+                    spotify_track = {
+                        "title": "Spotify Authentication Expired",
+                        "artists": "Run setup.py to re-authenticate",
+                        "album": "Token Refresh Required",
+                        "current_position": 0,
+                        "duration": 1,
+                        "is_playing": False,
+                        "main_color": (255, 165, 0),
+                        "secondary_color": (200, 140, 0)
+                    }
+                    update_spotify_layout(spotify_track)
+                    if START_SCREEN == "spotify":
+                        update_display()
                     return None
             except Exception as e:
-                print(f"Error refreshing token: {e}")
+                print(f"❌ Error refreshing Spotify token: {e}")
+                spotify_track = {
+                    "title": "Spotify Token Error",
+                    "artists": f"Error: {str(e)}",
+                    "album": "Check setup configuration",
+                    "current_position": 0,
+                    "duration": 1,
+                    "is_playing": False,
+                    "main_color": (255, 0, 0),
+                    "secondary_color": (200, 0, 0)
+                }
+                update_spotify_layout(spotify_track)
+                if START_SCREEN == "spotify":
+                    update_display()
                 return None
-        return spotipy.Spotify(auth=token_info['access_token'])
+        return spotipy.Spotify(auth=access_token)
     sp = get_spotify_client()
     if sp is None:
         print("Failed to initialize Spotify client.")
@@ -649,6 +770,8 @@ def spotify_loop():
     last_track_id = None
     spotify_error_count = 0
     had_no_track = True
+    last_art_url = None
+    print("🎵 Spotify loop started successfully")
     while not exit_event.is_set():
         try:
             sp = get_spotify_client()
@@ -657,17 +780,29 @@ def spotify_loop():
                 continue
             track = sp.current_user_playing_track()
             if not track or not track.get('item'):
-                if spotify_track is not None:
-                    spotify_track = None
-                    with art_lock: album_art_image = None
-                    with artist_image_lock: artist_image = None
-                    update_spotify_layout(None)
+                if spotify_track is not None and spotify_track.get('title') != "No track playing":
+                    spotify_track = {
+                        "title": "No track playing",
+                        "artists": "Play something on Spotify",
+                        "album": "Waiting for music...",
+                        "current_position": 0,
+                        "duration": 1,
+                        "is_playing": False,
+                        "main_color": (100, 100, 100),
+                        "secondary_color": (150, 150, 150)
+                    }
+                    with art_lock: 
+                        album_art_image = None
+                    with artist_image_lock: 
+                        artist_image = None
+                    update_spotify_layout(spotify_track)
                     if START_SCREEN == "spotify":
                         update_display()
                 had_no_track = True
                 time.sleep(SPOTIFY_UPDATE_INTERVAL)
                 continue
             spotify_error_count = 0
+            had_no_track = False
             item = track['item']
             current_id = item.get('id')
             artists_list = [artist['name'] for artist in item.get('artists', [])]
@@ -686,29 +821,35 @@ def spotify_loop():
             art_url = None
             if item.get('album') and item['album'].get('images'):
                 art_url = item['album']['images'][0]['url']
-            force_reload_art = had_no_track or (art_url != getattr(spotify_loop, 'last_art_url', None))
-            had_no_track = False
+            force_reload_art = (had_no_track or 
+                            current_id != last_track_id or 
+                            spotify_track is None or 
+                            art_url != last_art_url)
             if current_id != last_track_id or spotify_track is None or force_reload_art:
                 spotify_track = new_track
                 try:
                     if art_url:
-                        headers = {'User-Agent': 'Mozilla/5.0'}
+                        headers = {'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36'}
                         resp = requests.get(art_url, headers=headers, timeout=10)
                         resp.raise_for_status()
                         img = Image.open(BytesIO(resp.content)).convert("RGB")
                         img.thumbnail((150, 150), Image.LANCZOS)
-                        with art_lock: album_art_image = img
+                        with art_lock: 
+                            album_art_image = img
                         album_bg_cache.clear()
                         main_color, secondary_color = get_contrasting_colors(img)
                         spotify_track['main_color'] = main_color
                         spotify_track['secondary_color'] = secondary_color
                     else:
-                        with art_lock: album_art_image = None
+                        with art_lock: 
+                            album_art_image = None
                         spotify_track['main_color'] = (0, 255, 0)
                         spotify_track['secondary_color'] = (0, 255, 255)
-                    spotify_loop.last_art_url = art_url
-                except Exception:
-                    with art_lock: album_art_image = None
+                    last_art_url = art_url
+                except Exception as e:
+                    print(f"❌ Error loading album art: {e}")
+                    with art_lock: 
+                        album_art_image = None
                     spotify_track['main_color'] = (0, 255, 0)
                     spotify_track['secondary_color'] = (0, 255, 255)
                 update_spotify_layout(spotify_track)
@@ -718,38 +859,82 @@ def spotify_loop():
                     if data:
                         text_bbox = get_cached_text_bbox(data, SPOT_MEDIUM_FONT)
                         text_width = text_bbox[2] - text_bbox[0]
-                        label_bbox = get_cached_text_bbox("Track:" if key == "title" else "Artists:" if key == "artists" else "Album:", SPOT_MEDIUM_FONT)
-                        visible_width = SCREEN_WIDTH - 5 - (label_bbox[2] - label_bbox[0]) - 6
+                        label_text = "Track:" if key == "title" else "Artists:" if key == "artists" else "Album:"
+                        label_bbox = get_cached_text_bbox(label_text, SPOT_MEDIUM_FONT)
+                        label_width = label_bbox[2] - label_bbox[0]
+                        visible_width = SCREEN_WIDTH - 5 - label_width - 6
                         if text_width > visible_width:
                             scrolling_img = create_scrolling_text_image(data, SPOT_MEDIUM_FONT, spotify_track['main_color'], text_width * 2 + 50)
                             scrolling_text_cache[key] = scrolling_img
                             with scroll_lock:
                                 scroll_state[key]["active"] = True
                                 scroll_state[key]["max_offset"] = text_width + 50
+                                scroll_state[key]["offset"] = 0
                         else:
                             with scroll_lock:
                                 scroll_state[key]["active"] = False
                                 scroll_state[key]["max_offset"] = 0
+                                scroll_state[key]["offset"] = 0
                 if item.get('artists') and len(item['artists']) > 0:
                     primary_artist_id = item['artists'][0]['id']
                     Thread(target=fetch_and_store_artist_image, args=(sp, primary_artist_id), daemon=True).start()
                 last_track_id = current_id
                 if START_SCREEN == "spotify":
                     update_display()
+                    print(f"🎵 Now playing: {new_track['title']} by {new_track['artists']}")
             else:
                 spotify_track['current_position'] = track.get('progress_ms', 0) // 1000
                 spotify_track['is_playing'] = track.get('is_playing', False)
-        except Exception as e:
+        except requests.exceptions.RequestException as e:
             spotify_error_count += 1
-            print(f"Spotify error ({spotify_error_count}): {e}")
+            print(f"📡 Spotify network error ({spotify_error_count}): {e}")
             time.sleep(min(30, 2 ** spotify_error_count))
-            if spotify_error_count >= 5:
-                spotify_track = None
-                with art_lock: album_art_image = None
-                with artist_image_lock: artist_image = None
-                update_spotify_layout(None)
+        except spotipy.exceptions.SpotifyException as e:
+            spotify_error_count += 1
+            print(f"🎵 Spotify API error ({spotify_error_count}): {e}")
+            if e.http_status == 401:
+                print("🔑 Spotify token expired, requiring re-authentication")
+                try:
+                    os.remove(".spotify_cache")
+                except:
+                    pass
+                spotify_track = {
+                    "title": "Spotify Authentication Required",
+                    "artists": "Token expired - run setup.py",
+                    "album": "Re-authentication Needed",
+                    "current_position": 0,
+                    "duration": 1,
+                    "is_playing": False,
+                    "main_color": (255, 0, 0),
+                    "secondary_color": (200, 0, 0)
+                }
+                update_spotify_layout(spotify_track)
                 if START_SCREEN == "spotify":
                     update_display()
+            time.sleep(min(30, 2 ** spotify_error_count))
+        except Exception as e:
+            spotify_error_count += 1
+            print(f"❌ Unexpected Spotify error ({spotify_error_count}): {e}")
+            time.sleep(min(30, 2 ** spotify_error_count))
+        if spotify_error_count >= 5:
+            print("⚠️ Too many Spotify errors, showing error state")
+            spotify_track = {
+                "title": "Spotify Connection Error",
+                "artists": f"Error count: {spotify_error_count}",
+                "album": "Check network and authentication",
+                "current_position": 0,
+                "duration": 1,
+                "is_playing": False,
+                "main_color": (255, 0, 0),
+                "secondary_color": (200, 0, 0)
+            }
+            with art_lock: 
+                album_art_image = None
+            update_spotify_layout(spotify_track)
+            if START_SCREEN == "spotify":
+                update_display()
+            if spotify_error_count >= 10:
+                spotify_error_count = 0
         time.sleep(SPOTIFY_UPDATE_INTERVAL)
 
 def weather_loop():
