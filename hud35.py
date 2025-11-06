@@ -732,33 +732,15 @@ def spotify_loop():
                     print("✅ Spotify token refreshed successfully")
                 else:
                     print("❌ No refresh token available. Re-authentication required.")
-                    spotify_track = {
-                        "title": "Spotify Authentication Expired",
-                        "artists": "Run setup.py to re-authenticate",
-                        "album": "Token Refresh Required",
-                        "current_position": 0,
-                        "duration": 1,
-                        "is_playing": False,
-                        "main_color": (255, 165, 0),
-                        "secondary_color": (200, 140, 0)
-                    }
-                    update_spotify_layout(spotify_track)
+                    spotify_track = None
+                    update_spotify_layout(None)
                     if START_SCREEN == "spotify":
                         update_display()
                     return None
             except Exception as e:
                 print(f"❌ Error refreshing Spotify token: {e}")
-                spotify_track = {
-                    "title": "Spotify Token Error",
-                    "artists": f"Error: {str(e)}",
-                    "album": "Check setup configuration",
-                    "current_position": 0,
-                    "duration": 1,
-                    "is_playing": False,
-                    "main_color": (255, 0, 0),
-                    "secondary_color": (200, 0, 0)
-                }
-                update_spotify_layout(spotify_track)
+                spotify_track = None
+                update_spotify_layout(None)
                 if START_SCREEN == "spotify":
                     update_display()
                 return None
@@ -769,7 +751,6 @@ def spotify_loop():
         return
     last_track_id = None
     spotify_error_count = 0
-    had_no_track = True
     last_art_url = None
     print("🎵 Spotify loop started successfully")
     while not exit_event.is_set():
@@ -780,29 +761,18 @@ def spotify_loop():
                 continue
             track = sp.current_user_playing_track()
             if not track or not track.get('item'):
-                if spotify_track is not None and spotify_track.get('title') != "No track playing":
-                    spotify_track = {
-                        "title": "No track playing",
-                        "artists": "Play something on Spotify",
-                        "album": "Waiting for music...",
-                        "current_position": 0,
-                        "duration": 1,
-                        "is_playing": False,
-                        "main_color": (100, 100, 100),
-                        "secondary_color": (150, 150, 150)
-                    }
+                if spotify_track is not None:
+                    spotify_track = None
                     with art_lock: 
                         album_art_image = None
                     with artist_image_lock: 
                         artist_image = None
-                    update_spotify_layout(spotify_track)
+                    update_spotify_layout(None)
                     if START_SCREEN == "spotify":
                         update_display()
-                had_no_track = True
                 time.sleep(SPOTIFY_UPDATE_INTERVAL)
                 continue
             spotify_error_count = 0
-            had_no_track = False
             item = track['item']
             current_id = item.get('id')
             artists_list = [artist['name'] for artist in item.get('artists', [])]
@@ -821,8 +791,7 @@ def spotify_loop():
             art_url = None
             if item.get('album') and item['album'].get('images'):
                 art_url = item['album']['images'][0]['url']
-            force_reload_art = (had_no_track or 
-                            current_id != last_track_id or 
+            force_reload_art = (current_id != last_track_id or 
                             spotify_track is None or 
                             art_url != last_art_url)
             if current_id != last_track_id or spotify_track is None or force_reload_art:
@@ -898,17 +867,8 @@ def spotify_loop():
                     os.remove(".spotify_cache")
                 except:
                     pass
-                spotify_track = {
-                    "title": "Spotify Authentication Required",
-                    "artists": "Token expired - run setup.py",
-                    "album": "Re-authentication Needed",
-                    "current_position": 0,
-                    "duration": 1,
-                    "is_playing": False,
-                    "main_color": (255, 0, 0),
-                    "secondary_color": (200, 0, 0)
-                }
-                update_spotify_layout(spotify_track)
+                spotify_track = None
+                update_spotify_layout(None)
                 if START_SCREEN == "spotify":
                     update_display()
             time.sleep(min(30, 2 ** spotify_error_count))
@@ -918,19 +878,10 @@ def spotify_loop():
             time.sleep(min(30, 2 ** spotify_error_count))
         if spotify_error_count >= 5:
             print("⚠️ Too many Spotify errors, showing error state")
-            spotify_track = {
-                "title": "Spotify Connection Error",
-                "artists": f"Error count: {spotify_error_count}",
-                "album": "Check network and authentication",
-                "current_position": 0,
-                "duration": 1,
-                "is_playing": False,
-                "main_color": (255, 0, 0),
-                "secondary_color": (200, 0, 0)
-            }
+            spotify_track = None
             with art_lock: 
                 album_art_image = None
-            update_spotify_layout(spotify_track)
+            update_spotify_layout(None)
             if START_SCREEN == "spotify":
                 update_display()
             if spotify_error_count >= 10:
