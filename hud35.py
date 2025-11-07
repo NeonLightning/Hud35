@@ -752,6 +752,7 @@ def spotify_loop():
     last_track_id = None
     spotify_error_count = 0
     last_art_url = None
+    last_error_time = None
     print("🎵 Spotify loop started successfully")
     while not exit_event.is_set():
         try:
@@ -772,7 +773,11 @@ def spotify_loop():
                         update_display()
                 time.sleep(SPOTIFY_UPDATE_INTERVAL)
                 continue
-            spotify_error_count = 0
+            if spotify_error_count > 0 and last_error_time is not None:
+                if time.time() - last_error_time > 300:  # 5 minutes in seconds
+                    print("✅ 5 minutes without errors, resetting error count")
+                    spotify_error_count = 0
+                    last_error_time = None
             item = track['item']
             current_id = item.get('id')
             artists_list = [artist['name'] for artist in item.get('artists', [])]
@@ -856,10 +861,12 @@ def spotify_loop():
                 spotify_track['is_playing'] = track.get('is_playing', False)
         except requests.exceptions.RequestException as e:
             spotify_error_count += 1
+            last_error_time = time.time()
             print(f"📡 Spotify network error ({spotify_error_count}): {e}")
             time.sleep(min(30, 2 ** spotify_error_count))
         except spotipy.exceptions.SpotifyException as e:
             spotify_error_count += 1
+            last_error_time = time.time()
             print(f"🎵 Spotify API error ({spotify_error_count}): {e}")
             if e.http_status == 401:
                 print("🔑 Spotify token expired, requiring re-authentication")
@@ -874,6 +881,7 @@ def spotify_loop():
             time.sleep(min(30, 2 ** spotify_error_count))
         except Exception as e:
             spotify_error_count += 1
+            last_error_time = time.time()
             print(f"❌ Unexpected Spotify error ({spotify_error_count}): {e}")
             time.sleep(min(30, 2 ** spotify_error_count))
         if spotify_error_count >= 5:

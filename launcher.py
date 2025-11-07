@@ -4,7 +4,7 @@ from spotipy.oauth2 import SpotifyOAuth
 import os, toml, time, requests, subprocess, sys, signal, urllib.parse, socket, logging, threading
 
 app = Flask(__name__)
-
+app.secret_key = 'hud-launcher-secret-key'
 CONFIG_PATH = "config.toml"
 DEFAULT_CONFIG = {
     "fonts": {
@@ -561,6 +561,20 @@ SETUP_HTML = """
             padding: 15px;
             margin-top: 30px;
         }
+        .log-viewer-controls {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            margin-top: 20px;
+            padding: 15px;
+            background: var(--bg-tertiary);
+            border-radius: 8px;
+            justify-content: center;
+        }
+        .log-viewer-controls input {
+            width: 80px;
+            padding: 8px;
+        }
     </style>
 </head>
 <body data-theme="{{ ui_config.theme }}">
@@ -715,6 +729,13 @@ SETUP_HTML = """
             </div>
             <button type="submit" class="save-all-button">💾 Save All Settings</button>
         </form>
+        <div class="log-viewer-controls">
+            <form action="/view_logs" method="GET" style="display: flex; gap: 10px; align-items: center;">
+                <button type="submit" class="btn-secondary">📋 View Logs</button>
+                <label for="log_lines" style="color: var(--text-primary);">Lines:</label>
+                <input type="number" id="log_lines" name="lines" value="100" min="10" max="1000" style="width: 80px;">
+            </form>
+        </div>
     </div>
     <script>
         function toggleTheme() {
@@ -905,6 +926,286 @@ def process_callback_url():
         if os.path.exists(".spotify_cache"):
             os.remove(".spotify_cache")
     return redirect(url_for('index'))
+
+@app.route('/view_logs')
+def view_logs():
+    lines = request.args.get('lines', 100, type=int)
+    live = request.args.get('live', False, type=bool)
+    
+    # Load config to get theme
+    config = load_config()
+    ui_config = config.get("ui", {"theme": "dark"})
+    current_theme = ui_config.get("theme", "dark")
+    
+    log_file = 'hud35.log'
+    if not os.path.exists(log_file):
+        return "No log file found", 404
+    
+    try:
+        with open(log_file, 'r') as f:
+            all_lines = f.readlines()
+            recent_lines = all_lines[-lines:] if lines > 0 else all_lines
+            log_content = ''.join(recent_lines)
+    except Exception as e:
+        log_content = f"Error reading log file: {str(e)}"
+    
+    if live:
+        # Return plain text for live updates
+        return log_content
+    
+    # Return HTML page for initial view with theme support
+    return f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>HUD35 Logs</title>
+        <style>
+            :root {{
+                --bg-primary: #1a1a1a;
+                --bg-secondary: #2d2d2d;
+                --bg-tertiary: #3d3d3d;
+                --text-primary: #ffffff;
+                --text-secondary: #b0b0b0;
+                --accent-color: #007bff;
+                --accent-hover: #0056b3;
+                --border-color: #444444;
+                --log-bg: #000000;
+            }}
+            [data-theme="light"] {{
+                --bg-primary: #ffffff;
+                --bg-secondary: #f8f9fa;
+                --bg-tertiary: #e9ecef;
+                --text-primary: #212529;
+                --text-secondary: #6c757d;
+                --accent-color: #007bff;
+                --accent-hover: #0056b3;
+                --border-color: #dee2e6;
+                --log-bg: #f8f9fa;
+            }}
+            body {{ 
+                font-family: Arial, sans-serif; 
+                margin: 0;
+                padding: 20px;
+                background: var(--bg-primary);
+                color: var(--text-primary);
+                transition: all 0.3s ease;
+            }}
+            .container {{
+                max-width: 1200px;
+                margin: 0 auto;
+            }}
+            .header {{
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                margin-bottom: 20px;
+                padding: 15px;
+                background: var(--bg-secondary);
+                border-radius: 8px;
+                border: 1px solid var(--border-color);
+            }}
+            .controls {{
+                display: flex;
+                gap: 10px;
+                align-items: center;
+            }}
+            input, button, select {{
+                padding: 8px 12px;
+                border: 1px solid var(--border-color);
+                border-radius: 4px;
+                background: var(--bg-tertiary);
+                color: var(--text-primary);
+            }}
+            button {{
+                background: var(--accent-color);
+                border: none;
+                cursor: pointer;
+                color: white;
+            }}
+            button:hover {{
+                background: var(--accent-hover);
+            }}
+            .log-container {{
+                background: var(--log-bg);
+                padding: 15px;
+                border-radius: 8px;
+                font-family: 'Courier New', monospace;
+                font-size: 12px;
+                white-space: pre-wrap;
+                max-height: 70vh;
+                overflow-y: auto;
+                border: 1px solid var(--border-color);
+                color: var(--text-primary);
+            }}
+            .log-line {{
+                margin: 2px 0;
+                line-height: 1.4;
+            }}
+            .log-error {{ color: #ff6b6b; }}
+            .log-warning {{ color: #ffd93d; }}
+            .log-info {{ color: #6bcbef; }}
+            .log-success {{ color: #6bcf7f; }}
+            .log-debug {{ color: #a0a0a0; }}
+            .theme-toggle {{
+                background: var(--accent-color);
+                color: white;
+                border: none;
+                padding: 8px 12px;
+                border-radius: 20px;
+                cursor: pointer;
+                font-size: 12px;
+                margin-left: 10px;
+            }}
+            .theme-toggle:hover {{
+                background: var(--accent-hover);
+            }}
+        </style>
+    </head>
+    <body data-theme="{current_theme}">
+        <div class="container">
+            <div class="header">
+                <h2>HUD35 Log Viewer</h2>
+                <div class="controls">
+                    <form id="linesForm" method="GET" style="display: flex; gap: 10px; align-items: center;">
+                        <label for="lines">Lines to show:</label>
+                        <input type="number" id="lines" name="lines" value="{lines}" min="10" max="10000" style="width: 80px;">
+                        <button type="submit">Update</button>
+                    </form>
+                    <button onclick="toggleLive()" id="liveBtn">▶️ Start Live</button>
+                    <button onclick="location.href='/'">← Back to Launcher</button>
+                    <button onclick="clearLogs()">🗑️ Clear Logs</button>
+                    <button class="theme-toggle" onclick="toggleTheme()" id="themeBtn">
+                        { '☀️' if current_theme == 'dark' else '🌙' }
+                    </button>
+                </div>
+            </div>
+            <div class="log-container" id="logContent">
+{log_content}
+            </div>
+        </div>
+        
+        <script>
+            let liveUpdate = false;
+            let updateInterval;
+            let currentTheme = '{current_theme}';
+            
+            function toggleTheme() {{
+                currentTheme = currentTheme === 'dark' ? 'light' : 'dark';
+                document.body.setAttribute('data-theme', currentTheme);
+                const btn = document.getElementById('themeBtn');
+                btn.innerHTML = currentTheme === 'dark' ? '☀️' : '🌙';
+                
+                // Save theme preference
+                const form = document.createElement('form');
+                form.method = 'POST';
+                form.action = '/toggle_theme';
+                const themeInput = document.createElement('input');
+                themeInput.type = 'hidden';
+                themeInput.name = 'theme';
+                themeInput.value = currentTheme;
+                form.appendChild(themeInput);
+                document.body.appendChild(form);
+                form.submit();
+            }}
+            
+            function toggleLive() {{
+                liveUpdate = !liveUpdate;
+                const btn = document.getElementById('liveBtn');
+                
+                if (liveUpdate) {{
+                    btn.innerHTML = '⏸️ Stop Live';
+                    startLiveUpdates();
+                }} else {{
+                    btn.innerHTML = '▶️ Start Live';
+                    stopLiveUpdates();
+                }}
+            }}
+            
+            function startLiveUpdates() {{
+                const lines = document.getElementById('lines').value;
+                updateInterval = setInterval(() => {{
+                    fetch(`/view_logs?lines=${{lines}}&live=true`)
+                        .then(response => response.text())
+                        .then(data => {{
+                            document.getElementById('logContent').innerText = data;
+                            colorCodeLogs();
+                            scrollToBottom();
+                        }});
+                }}, 2000);
+            }}
+            
+            function stopLiveUpdates() {{
+                if (updateInterval) {{
+                    clearInterval(updateInterval);
+                }}
+            }}
+            
+            function scrollToBottom() {{
+                const logContainer = document.getElementById('logContent');
+                logContainer.scrollTop = logContainer.scrollHeight;
+            }}
+            
+            function clearLogs() {{
+                if (confirm('Are you sure you want to clear the logs?')) {{
+                    fetch('/clear_logs', {{ method: 'POST' }})
+                        .then(() => {{
+                            document.getElementById('logContent').innerText = 'Logs cleared...';
+                            colorCodeLogs();
+                        }});
+                }}
+            }}
+            
+            // Color code log lines
+            function colorCodeLogs() {{
+                const container = document.getElementById('logContent');
+                const lines = container.innerText.split('\\n');
+                let coloredHTML = '';
+                
+                lines.forEach(line => {{
+                    let cssClass = 'log-line';
+                    if (line.includes('ERROR') || line.includes('❌') || line.toLowerCase().includes('error')) {{
+                        cssClass += ' log-error';
+                    }} else if (line.includes('WARNING') || line.includes('⚠️') || line.toLowerCase().includes('warning')) {{
+                        cssClass += ' log-warning';
+                    }} else if (line.includes('INFO') || line.includes('✅') || line.includes('📍') || line.includes('🚀') || line.includes('🔍') || line.includes('⏳') || line.includes('🔧') || line.includes('🧹') || line.toLowerCase().includes('info')) {{
+                        cssClass += ' log-info';
+                    }} else if (line.includes('SUCCESS') || line.toLowerCase().includes('success')) {{
+                        cssClass += ' log-success';
+                    }} else if (line.includes('DEBUG') || line.toLowerCase().includes('debug')) {{
+                        cssClass += ' log-debug';
+                    }}
+                    coloredHTML += `<div class="${{cssClass}}">${{line}}</div>`;
+                }});
+                
+                container.innerHTML = coloredHTML;
+            }}
+            
+            // Initial color coding
+            colorCodeLogs();
+            scrollToBottom();
+            
+            // Handle form submission to preserve theme
+            document.getElementById('linesForm').addEventListener('submit', function(e) {{
+                const input = document.createElement('input');
+                input.type = 'hidden';
+                input.name = 'theme';
+                input.value = currentTheme;
+                this.appendChild(input);
+            }});
+        </script>
+    </body>
+    </html>
+    """
+
+@app.route('/clear_logs', methods=['POST'])
+def clear_logs():
+    log_file = 'hud35.log'
+    try:
+        with open(log_file, 'w') as f:
+            f.write('')
+        return 'Logs cleared', 200
+    except Exception as e:
+        return f'Error clearing logs: {str(e)}', 500
 
 def cleanup():
     logger = logging.getLogger('Launcher')
