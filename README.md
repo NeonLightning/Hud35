@@ -3,7 +3,7 @@
 A Raspberry Pi-based display system that shows weather information and currently playing Spotify tracks on a 480x320 screen. Features automatic background switching based on weather conditions, animated album art, and touch screen controls.
 
 
-![HUD35 Display System in action](display.gif)
+![HUD35 Display System in action](screenshots/display.gif)
 
 (city is censored lol)
 
