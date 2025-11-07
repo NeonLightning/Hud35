@@ -7,6 +7,7 @@ A Raspberry Pi-based display system that shows weather information and currently
 
 (city is censored lol)
 
+![More Screenshots](screenshots)
 
 ## Features
 
