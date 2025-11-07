@@ -4,7 +4,6 @@ from spotipy.oauth2 import SpotifyOAuth
 import os, toml, time, requests, subprocess, sys, signal, urllib.parse, socket, logging, threading
 
 app = Flask(__name__)
-app.secret_key = 'hud35_setup_secret_key_change_in_production'
 
 CONFIG_PATH = "config.toml"
 DEFAULT_CONFIG = {
@@ -78,7 +77,8 @@ def setup_logging():
         level=logging.INFO,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
         handlers=[
-            logging.StreamHandler()
+            logging.StreamHandler(),
+            logging.FileHandler('hud35.log')
         ]
     )
     return logging.getLogger('Launcher')
@@ -228,7 +228,7 @@ def start_hud35():
         if hud35_process.poll() is None:
             return True, "HUD35 started successfully"
         else:
-            return False, "HUD35 failed to start (check launcher.log for details)"
+            return False, "HUD35 failed to start (check hud35.log for details)"
     except Exception as e:
         logger.error(f"Error starting HUD35: {str(e)}")
         return False, f"Error starting HUD35: {str(e)}"
@@ -278,11 +278,10 @@ def start_neonwifi():
         if neonwifi_process.poll() is None:
             return True, "neonwifi started successfully"
         else:
-            return False, "neonwifi failed to start (check launcher.log for details)"
+            return False, "neonwifi failed to start (check hud35.log for details)"
     except Exception as e:
         logger.error(f"Error starting neonwifi: {str(e)}")
         return False, f"Error starting neonwifi: {str(e)}"
-
 
 def stop_neonwifi():
     global neonwifi_process
@@ -954,7 +953,7 @@ def main():
     else:
         logger.info("📍 Web UI available at: http://127.0.0.1:5000")
         logger.info("   (Could not detect LAN IP - using localhost)")
-    logger.info("⏹️  Press Ctrl+C to stop the launcher")
+    logger.info("⏹️  Press Ctrl+C to stop the hud35")
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
     try:
