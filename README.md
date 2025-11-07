@@ -124,11 +124,7 @@ The system automatically tracks your listening history and provides:
 
 Access music statistics from the main dashboard or directly at `/music_stats`.
 
-## WiFi Management Service
-
-The system includes an optional WiFi management service (`neonwifi.py`) that provides:
-
-### Features
+### Wifi Config Features
 - **Web-based WiFi configuration** - Connect to new networks without SSH
 - **Automatic AP mode** - Creates access point when no WiFi is available
 - **Connection monitoring** - Automatically restores AP if connection is lost
