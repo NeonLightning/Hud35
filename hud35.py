@@ -34,12 +34,13 @@ DEFAULT_CONFIG = {
     "display": {
         "type": "st7789",
         "framebuffer": "/dev/fb1", 
+        "rotation": 0,
         "st7789": {
             "spi_port": 0,
             "spi_cs": 1,
             "dc_pin": 9,
             "backlight_pin": 13,
-            "rotation": 180,
+            "rotation": 0,
             "spi_speed": 60000000
         }
     },
@@ -1067,18 +1068,19 @@ def init_st7789_display():
     global st7789_display
     if not HAS_ST7789: return None
     try:
-        st7789_config = config["display"]["st7789"]
+        st7789_config = config["display"].get("st7789", {})
+        config_rotation = config["display"].get("rotation", 0)
         st7789_display = st7789.ST7789(
-            port=st7789_config["spi_port"],
-            cs=st7789_config["spi_cs"], 
-            dc=st7789_config["dc_pin"],
-            backlight=st7789_config["backlight_pin"],
+            port=st7789_config.get("spi_port", 0),
+            cs=st7789_config.get("spi_cs", 1),
+            dc=st7789_config.get("dc_pin", 9),
+            backlight=st7789_config.get("backlight_pin", 13),
             width=320,
             height=240,
-            rotation=st7789_config["rotation"],
-            spi_speed_hz=st7789_config["spi_speed"]
+            rotation=config_rotation,
+            spi_speed_hz=st7789_config.get("spi_speed", 60000000)
         )
-        print("ST7789 display initialized")
+        print(f"ST7789 display initialized with rotation: {config_rotation}°")
         return st7789_display
     except Exception as e:
         print(f"ST7789 init failed: {e}")
@@ -1091,28 +1093,46 @@ def display_image_on_st7789(image):
             st7789_display = init_st7789_display()
             if st7789_display is None: return
         scaled_image = image.resize((320, 240), Image.LANCZOS)
-        if scaled_image.mode != "RGB": scaled_image = scaled_image.convert("RGB")
+        if scaled_image.mode != "RGB": 
+            scaled_image = scaled_image.convert("RGB")
         st7789_display.display(scaled_image)
     except Exception as e:
         print(f"ST7789 display error: {e}")
         display_image_on_original_fb(image)
 
 def display_image_on_original_fb(image):
-    if image.mode != "RGB": image = image.convert("RGB")
-    if image.size != (SCREEN_WIDTH, SCREEN_HEIGHT):
-        full_img = Image.new("RGB", (SCREEN_WIDTH, SCREEN_HEIGHT), "black")
-        full_img.paste(image, (0, 0))
-        image = full_img
-    arr = np.array(image, dtype=np.uint8)
-    r = _gamma_r[arr[:, :, 0]].astype(np.uint16)
-    g = _gamma_g[arr[:, :, 1]].astype(np.uint16)
-    b = _gamma_b[arr[:, :, 2]].astype(np.uint16)
-    rgb565 = (r << 11) | (g << 5) | b
-    output = np.empty((SCREEN_HEIGHT, SCREEN_WIDTH, 2), dtype=np.uint8)
-    output[:, :, 0] = rgb565 & 0xFF
-    output[:, :, 1] = (rgb565 >> 8) & 0xFF
-    with open(FRAMEBUFFER, "wb") as fb:
-        fb.write(output.tobytes())
+    try:
+        rotation = config["display"].get("rotation", 0)
+        if rotation == 180:
+            rotated_image = image.rotate(180, expand=False)
+        else:
+            rotated_image = image.rotate(rotation, expand=True)
+        if rotated_image.mode != "RGB": 
+            rotated_image = rotated_image.convert("RGB")
+        if rotated_image.size != (SCREEN_WIDTH, SCREEN_HEIGHT):
+            full_img = Image.new("RGB", (SCREEN_WIDTH, SCREEN_HEIGHT), "black")
+            x = (SCREEN_WIDTH - rotated_image.width) // 2
+            y = (SCREEN_HEIGHT - rotated_image.height) // 2
+            full_img.paste(rotated_image, (x, y))
+            rotated_image = full_img
+        arr = np.array(rotated_image, dtype=np.uint8)
+        r = _gamma_r[arr[:, :, 0]].astype(np.uint16)
+        g = _gamma_g[arr[:, :, 1]].astype(np.uint16)
+        b = _gamma_b[arr[:, :, 2]].astype(np.uint16)
+        rgb565 = (r << 11) | (g << 5) | b
+        output = np.empty((SCREEN_HEIGHT, SCREEN_WIDTH, 2), dtype=np.uint8)
+        output[:, :, 0] = rgb565 & 0xFF
+        output[:, :, 1] = (rgb565 >> 8) & 0xFF
+        with open(FRAMEBUFFER, "wb") as fb:
+            fb.write(output.tobytes())
+    except PermissionError:
+        print(f"Permission denied for {FRAMEBUFFER} - falling back to ST7789")
+        if HAS_ST7789:
+            display_image_on_st7789(image)
+        else:
+            print("No display available")
+    except Exception as e:
+        print(f"Framebuffer error: {e}")
 
 def find_touchscreen():
     for path in evdev.list_devices():
@@ -1162,8 +1182,11 @@ def handle_buttons():
                     current_time = time.time()
                     if current_time - button_last_press[button] > DEBOUNCE_TIME:
                         button_last_press[button] = current_time
-                        if button in [BUTTON_A, BUTTON_B]:
-                            START_SCREEN = "spotify" if START_SCREEN == "weather" else "weather"
+                        if button ==BUTTON_A:
+                            START_SCREEN = "spotify"
+                            update_display()
+                        elif button == BUTTON_B:
+                            START_SCREEN == "weather"
                             update_display()
                         elif button == BUTTON_X:
                             global art_pos, artist_pos

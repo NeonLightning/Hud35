@@ -10,6 +10,11 @@ app.secret_key = 'hud-launcher-secret-key'
 
 CONFIG_PATH = "config.toml"
 DEFAULT_CONFIG = {
+    "display": {
+        "type": "framebuffer",
+        "framebuffer": "/dev/fb1",
+        "rotation": 0
+    },
     "fonts": {
         "large_font_path": "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
         "large_font_size": 36,
@@ -741,6 +746,22 @@ SETUP_HTML = """
                     <div>
                         <h3>Display Settings</h3>
                         <div class="form-group">
+                            <label for="display_type">Display Type:</label>
+                            <select id="display_type" name="display_type">
+                                <option value="framebuffer" {% if config.display.type == "framebuffer" %}selected{% endif %}>Framebuffer (TFT 3.5")</option>
+                                <option value="st7789" {% if config.display.type == "st7789" %}selected{% endif %}>ST7789 (DisplayHatMini)</option>
+                            </select>
+                            <small>Select your display hardware</small>
+                        </div>
+                        <div class="form-group">
+                            <label for="rotation">Rotation:</label>
+                            <select id="rotation" name="rotation">
+                                <option value="0" {% if config.display.rotation == 0 %}selected{% endif %}>0°</option>
+                                <option value="180" {% if config.display.rotation == 180 %}selected{% endif %}>180°</option>
+                            </select>
+                            <small>Screen rotation (applies to both display types)</small>
+                        </div>
+                        <div class="form-group">
                             <label for="start_screen">Start Screen:</label>
                             <select id="start_screen" name="start_screen">
                                 <option value="weather" {% if config.settings.start_screen == "weather" %}selected{% endif %}>Weather</option>
@@ -1241,7 +1262,8 @@ def save_all_config():
     config["settings"]["use_gpsd"] = 'use_gpsd' in request.form
     config["settings"]["use_google_geo"] = 'use_google_geo' in request.form
     config["settings"]["time_display"] = 'time_display' in request.form
-    config["settings"]["framebuffer"] = request.form.get('framebuffer', '/dev/fb1')
+    config["display"]["type"] = request.form.get('display_type', 'framebuffer')
+    config["display"]["rotation"] = int(request.form.get('rotation', 0))
     config["auto_start"] = {
         "auto_start_hud35": 'auto_start_hud35' in request.form,
         "auto_start_neonwifi": 'auto_start_neonwifi' in request.form,
