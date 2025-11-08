@@ -76,6 +76,14 @@ def connect():
     threading.Thread(target=connect_wifi_background, args=(ssid, password), daemon=True).start()
     return "<h2>Connecting...</h2><p>You may lose connection temporarily</p>"
 
+def is_wifi_connected():
+    try:
+        result = subprocess.run(['nmcli', '-t', '-f', 'GENERAL.STATE', 'dev', 'show', WIFI_INTERFACE], 
+                              capture_output=True, text=True)
+        return 'connected' in result.stdout
+    except:
+        return False
+
 def connect_wifi_background(ssid, password):
     global SHUTDOWN_FLAG
     if SHUTDOWN_FLAG:
@@ -182,16 +190,17 @@ def main():
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
     print("🚀 Starting WiFi Manager")
-    cleanup()
-    create_access_point()
-
+    if is_wifi_connected():
+        print("✅ Already connected to WiFi - AP mode not needed")
+    else:
+        cleanup()
+        create_access_point()
     def start_flask():
         print("✅ Web server starting")
         print("Press Ctrl+C to stop the program")
         sys.stdout = open(os.devnull, 'w')
         sys.stderr = open(os.devnull, 'w')
         app.run(host='0.0.0.0', port=80, debug=False, use_reloader=False)
-
     threading.Thread(target=start_flask, daemon=True).start()
     try:
         while not SHUTDOWN_FLAG:

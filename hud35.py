@@ -5,7 +5,17 @@ from io import BytesIO
 from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageEnhance
 from threading import Thread, Event, RLock
 from spotipy.oauth2 import SpotifyOAuth
-
+try:
+    import st7789
+    HAS_ST7789 = True
+except ImportError:
+    HAS_ST7789 = False
+try:
+    import RPi.GPIO as GPIO
+    HAS_GPIO = True
+except ImportError:
+    HAS_GPIO = False
+    
 sys.stdout.reconfigure(line_buffering=True) 
 
 SCREEN_WIDTH = 480
@@ -21,6 +31,18 @@ RGB565_MASKS = (0xF8, 0xFC, 0xF8)
 RGB565_SHIFTS = (8, 3, -3)
 BG_DIR = "./bg"
 DEFAULT_CONFIG = {
+    "display": {
+        "type": "st7789",
+        "framebuffer": "/dev/fb1", 
+        "st7789": {
+            "spi_port": 0,
+            "spi_cs": 1,
+            "dc_pin": 9,
+            "backlight_pin": 13,
+            "rotation": 180,
+            "spi_speed": 60000000
+        }
+    },
     "fonts": {
         "large_font_path": "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
         "large_font_size": 36,
@@ -50,6 +72,12 @@ DEFAULT_CONFIG = {
         "use_google_geo": True,
         "time_display": True
     },
+        "buttons": {
+        "button_a": 5,
+        "button_b": 6, 
+        "button_x": 16,
+        "button_y": 24
+    }
 }
 
 bg_cache = {}
@@ -62,6 +90,7 @@ exit_event = Event()
 art_lock = RLock()
 artist_image_lock = RLock()
 scroll_lock = RLock()
+st7789_display = None
 
 def load_config(path="config.toml"):
     if not os.path.exists(path):
@@ -72,15 +101,15 @@ def load_config(path="config.toml"):
         with open(path, 'r') as f:
             loaded_config = toml.load(f)
         merged_config = copy.deepcopy(DEFAULT_CONFIG)
-        def merge_dicts(default, user):
-            result = default.copy()
-            for key, value in user.items():
-                if key in result and isinstance(result[key], dict) and isinstance(value, dict):
-                    result[key] = merge_dicts(result[key], value)
+        for category in loaded_config:
+            if category in merged_config:
+                if isinstance(merged_config[category], dict) and isinstance(loaded_config[category], dict):
+                    for key in loaded_config[category]:
+                        merged_config[category][key] = loaded_config[category][key]
                 else:
-                    result[key] = value
-            return result
-        merged_config = merge_dicts(merged_config, loaded_config)
+                    merged_config[category] = loaded_config[category]
+            else:
+                merged_config[category] = loaded_config[category]
         with open(path, 'w') as f:
             toml.dump(merged_config, f)
         return merged_config
@@ -108,10 +137,16 @@ USE_GPSD = config["settings"]["use_gpsd"]
 USE_GOOGLE_GEO = config["settings"]["use_google_geo"]
 TIME_DISPLAY = config["settings"]["time_display"]
 FRAMEBUFFER = config["settings"]["framebuffer"]
+BUTTON_A = config["buttons"]["button_a"]
+BUTTON_B = config["buttons"]["button_b"]
+BUTTON_X = config["buttons"]["button_x"]
+BUTTON_Y = config["buttons"]["button_y"]
 GAMMA = 1.5
 MIN_DISPLAY_INTERVAL = 0.001
 TEXT_METRICS = {}
+DEBOUNCE_TIME = 0.3
 
+button_last_press = {BUTTON_A: 0, BUTTON_B: 0, BUTTON_X: 0, BUTTON_Y: 0}
 _gamma_r = np.array([int(((i / 255.0) ** (1 / GAMMA)) * 31 + 0.5) for i in range(256)], dtype=np.uint8)
 _gamma_g = np.array([int(((i / 255.0) ** (1 / GAMMA)) * 63 + 0.5) for i in range(256)], dtype=np.uint8)
 _gamma_b = np.array([int(((i / 255.0) ** (1 / GAMMA)) * 31 + 0.5) for i in range(256)], dtype=np.uint8)
@@ -206,7 +241,6 @@ def check_configuration():
         sys.exit(1)
 
 def setup_spotify_oauth():
-    config = load_config()
     return SpotifyOAuth(
         client_id=config["api_keys"]["client_id"],
         client_secret=config["api_keys"]["client_secret"],
@@ -239,22 +273,31 @@ def cleanup_caches():
 def quantize_to_rgb565(r, g, b):
     return (r // 8) * 8, (g // 4) * 4, (b // 8) * 8
 
-def display_image_on_framebuffer(image):
-    if image.mode != "RGB": image = image.convert("RGB")
-    if image.size != (SCREEN_WIDTH, SCREEN_HEIGHT):
-        full_img = Image.new("RGB", (SCREEN_WIDTH, SCREEN_HEIGHT), "black")
-        full_img.paste(image, (0, 0))
-        image = full_img
-    arr = np.array(image, dtype=np.uint8)
-    r = _gamma_r[arr[:, :, 0]].astype(np.uint16)
-    g = _gamma_g[arr[:, :, 1]].astype(np.uint16)
-    b = _gamma_b[arr[:, :, 2]].astype(np.uint16)
-    rgb565 = (r << 11) | (g << 5) | b
-    output = np.empty((SCREEN_HEIGHT, SCREEN_WIDTH, 2), dtype=np.uint8)
-    output[:, :, 0] = rgb565 & 0xFF
-    output[:, :, 1] = (rgb565 >> 8) & 0xFF
-    with open(FRAMEBUFFER, "wb") as fb:
-        fb.write(output.tobytes())
+def display_image_on_original_fb(image):
+    try:
+        if image.mode != "RGB": image = image.convert("RGB")
+        if image.size != (SCREEN_WIDTH, SCREEN_HEIGHT):
+            full_img = Image.new("RGB", (SCREEN_WIDTH, SCREEN_HEIGHT), "black")
+            full_img.paste(image, (0, 0))
+            image = full_img
+        arr = np.array(image, dtype=np.uint8)
+        r = _gamma_r[arr[:, :, 0]].astype(np.uint16)
+        g = _gamma_g[arr[:, :, 1]].astype(np.uint16)
+        b = _gamma_b[arr[:, :, 2]].astype(np.uint16)
+        rgb565 = (r << 11) | (g << 5) | b
+        output = np.empty((SCREEN_HEIGHT, SCREEN_WIDTH, 2), dtype=np.uint8)
+        output[:, :, 0] = rgb565 & 0xFF
+        output[:, :, 1] = (rgb565 >> 8) & 0xFF
+        with open(FRAMEBUFFER, "wb") as fb:
+            fb.write(output.tobytes())
+    except PermissionError:
+        print(f"Permission denied for {FRAMEBUFFER} - falling back to ST7789")
+        if HAS_ST7789:
+            display_image_on_st7789(image)
+        else:
+            print("No display available")
+    except Exception as e:
+        print(f"Framebuffer error: {e}")
 
 def get_location_via_gpsd(timeout=5, debug=True):
     try:
@@ -959,7 +1002,18 @@ def animate_text_scroll():
 
 def animate_images():
     global START_SCREEN, art_pos, art_velocity, artist_pos, artist_velocity, artist_on_top
+    last_animation_time = time.time()
     while not exit_event.is_set():
+        current_time = time.time()
+        frame_time = current_time - last_animation_time
+        last_animation_time = current_time        
+        display_type = config.get("display", {}).get("type", "framebuffer")
+        if display_type == "st7789" and HAS_ST7789:
+            speed_factor = 0.4
+            step_multiplier = 1
+        else:
+            speed_factor = 0.4
+            step_multiplier = 0.8
         needs_update = False
         with art_lock:
             album_img = album_art_image
@@ -967,8 +1021,8 @@ def animate_images():
             w, h = album_img.size
             x, y = art_pos
             dx, dy = art_velocity
-            new_x = x + dx
-            new_y = y + dy
+            new_x = x + (dx * frame_time * 60 * speed_factor * step_multiplier)
+            new_y = y + (dy * frame_time * 60 * speed_factor * step_multiplier)
             new_dx, new_dy = dx, dy
             if new_x <= 0 or new_x + w >= SCREEN_WIDTH:
                 new_dx = -dx
@@ -986,8 +1040,8 @@ def animate_images():
             w, h = artist_img.size
             x, y = artist_pos
             dx, dy = artist_velocity
-            new_x = x + dx
-            new_y = y + dy
+            new_x = x + (dx * frame_time * 60 * speed_factor * step_multiplier)
+            new_y = y + (dy * frame_time * 60 * speed_factor * step_multiplier)
             new_dx, new_dy = dx, dy
             bounced = False
             if new_x <= 0 or new_x + w >= SCREEN_WIDTH:
@@ -1009,20 +1063,133 @@ def animate_images():
             update_display()
         time.sleep(1/60)
 
+def init_st7789_display():
+    global st7789_display
+    if not HAS_ST7789: return None
+    try:
+        st7789_config = config["display"]["st7789"]
+        st7789_display = st7789.ST7789(
+            port=st7789_config["spi_port"],
+            cs=st7789_config["spi_cs"], 
+            dc=st7789_config["dc_pin"],
+            backlight=st7789_config["backlight_pin"],
+            width=320,
+            height=240,
+            rotation=st7789_config["rotation"],
+            spi_speed_hz=st7789_config["spi_speed"]
+        )
+        print("ST7789 display initialized")
+        return st7789_display
+    except Exception as e:
+        print(f"ST7789 init failed: {e}")
+        return None
+
+def display_image_on_st7789(image):
+    global st7789_display
+    try:
+        if st7789_display is None:
+            st7789_display = init_st7789_display()
+            if st7789_display is None: return
+        scaled_image = image.resize((320, 240), Image.LANCZOS)
+        if scaled_image.mode != "RGB": scaled_image = scaled_image.convert("RGB")
+        st7789_display.display(scaled_image)
+    except Exception as e:
+        print(f"ST7789 display error: {e}")
+        display_image_on_original_fb(image)
+
+def display_image_on_original_fb(image):
+    if image.mode != "RGB": image = image.convert("RGB")
+    if image.size != (SCREEN_WIDTH, SCREEN_HEIGHT):
+        full_img = Image.new("RGB", (SCREEN_WIDTH, SCREEN_HEIGHT), "black")
+        full_img.paste(image, (0, 0))
+        image = full_img
+    arr = np.array(image, dtype=np.uint8)
+    r = _gamma_r[arr[:, :, 0]].astype(np.uint16)
+    g = _gamma_g[arr[:, :, 1]].astype(np.uint16)
+    b = _gamma_b[arr[:, :, 2]].astype(np.uint16)
+    rgb565 = (r << 11) | (g << 5) | b
+    output = np.empty((SCREEN_HEIGHT, SCREEN_WIDTH, 2), dtype=np.uint8)
+    output[:, :, 0] = rgb565 & 0xFF
+    output[:, :, 1] = (rgb565 >> 8) & 0xFF
+    with open(FRAMEBUFFER, "wb") as fb:
+        fb.write(output.tobytes())
+
 def find_touchscreen():
     for path in evdev.list_devices():
         dev = evdev.InputDevice(path)
-        if "ADS7846" in dev.name or "Touchscreen" in dev.name: return dev
-    raise RuntimeError("Touchscreen not found")
+        if "ADS7846" in dev.name or "Touchscreen" in dev.name or "touch" in dev.name.lower(): 
+            return dev
+    print("Touchscreen not found - touch controls disabled")
+    return None
 
 def handle_touch():
     global START_SCREEN
     device = find_touchscreen()
+    if device is None:
+        while not exit_event.is_set():
+            time.sleep(1)
+        return
     for event in device.read_loop():
         if exit_event.is_set(): break
         if event.type == evdev.ecodes.EV_KEY and event.code == evdev.ecodes.BTN_TOUCH and event.value == 1:
             START_SCREEN = "spotify" if START_SCREEN == "weather" else "weather"
             update_display()
+
+def handle_buttons():
+    global START_SCREEN
+    if not HAS_GPIO:
+        print("GPIO not available - button controls disabled")
+        while not exit_event.is_set():
+            time.sleep(1)
+        return
+    GPIO.setmode(GPIO.BCM)
+    buttons = [BUTTON_A, BUTTON_B, BUTTON_X, BUTTON_Y]
+    for button in buttons:
+        try:
+            GPIO.setup(button, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+        except Exception as e:
+            if "busy" in str(e).lower():
+                print(f"⚠️ GPIO {button} already in use, skipping setup.")
+                return
+            else:
+                raise
+    print("Button handler started - 4-button configuration:")
+    print("A: Switch screens, B: Switch screens, X: Reset art, Y: Toggle time")
+    while not exit_event.is_set():
+        for button in buttons:
+            try:
+                if GPIO.input(button) == GPIO.LOW:
+                    current_time = time.time()
+                    if current_time - button_last_press[button] > DEBOUNCE_TIME:
+                        button_last_press[button] = current_time
+                        if button in [BUTTON_A, BUTTON_B]:
+                            START_SCREEN = "spotify" if START_SCREEN == "weather" else "weather"
+                            update_display()
+                        elif button == BUTTON_X:
+                            global art_pos, artist_pos
+                            art_pos = [float(SCREEN_WIDTH - 155), float(SCREEN_HEIGHT - 155)]
+                            artist_pos = [5, float(SCREEN_HEIGHT - 105)]
+                            if START_SCREEN == "spotify":
+                                update_display()
+                        elif button == BUTTON_Y:
+                            global TIME_DISPLAY
+                            TIME_DISPLAY = not TIME_DISPLAY
+                            update_display()
+            except Exception:
+                pass
+        time.sleep(0.1)
+    GPIO.cleanup()
+
+def display_image_on_framebuffer(image):
+    global last_display_time
+    now = time.time()
+    if now - last_display_time < MIN_DISPLAY_INTERVAL: return
+    last_display_time = now
+    display_type = config.get("display", {}).get("type", "framebuffer")
+    if display_type == "st7789" and HAS_ST7789:
+        display_image_on_st7789(image)
+    else:
+        display_image_on_original_fb(image)
 
 def update_display():
     global START_SCREEN
@@ -1033,13 +1200,19 @@ def update_display():
     display_image_on_framebuffer(img)
 
 def clear_framebuffer():
-    with open(FRAMEBUFFER, "wb") as f:
-        f.write(b'\x00\x00' * SCREEN_AREA)
+    display_type = config.get("display", {}).get("type", "framebuffer")
+    if display_type == "st7789" and HAS_ST7789 and st7789_display:
+        black_img = Image.new("RGB", (320, 240), "black")
+        st7789_display.display(black_img)
+    else:
+        with open(FRAMEBUFFER, "wb") as f:
+            f.write(b'\x00\x00' * SCREEN_AREA)
 
 def main():
     Thread(target=weather_loop, daemon=True).start()
     Thread(target=spotify_loop, daemon=True).start()
     Thread(target=handle_touch, daemon=True).start()
+    Thread(target=handle_buttons, daemon=True).start()
     Thread(target=animate_images, daemon=True).start()
     Thread(target=animate_text_scroll, daemon=True).start()
     update_display()
