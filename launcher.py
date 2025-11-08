@@ -1327,6 +1327,9 @@ def save_all_config():
         "check_internet": 'check_internet' in request.form
     }
     save_config(config)
+    stop_hud35()
+    time.sleep(3)
+    start_hud35()
     flash('success', 'All settings saved successfully!')
     return redirect(url_for('index'))
 
