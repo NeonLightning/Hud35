@@ -15,7 +15,7 @@ try:
     HAS_GPIO = True
 except ImportError:
     HAS_GPIO = False
-    
+
 sys.stdout.reconfigure(line_buffering=True) 
 
 SCREEN_WIDTH = 480
@@ -750,63 +750,134 @@ def fetch_and_store_artist_image(sp, artist_id):
 
 def spotify_loop():
     global START_SCREEN, spotify_track, sp, album_art_image, scrolling_text_cache
-    sp_oauth = setup_spotify_oauth()
-    token_info = sp_oauth.get_cached_token()
-    if not token_info:
-        print("Spotify not authenticated. Please run setup to authenticate.")
+    
+    # Validate token cache file first
+    if os.path.exists(".spotify_cache"):
+        try:
+            with open(".spotify_cache", "r") as f:
+                cache_content = f.read().strip()
+                if not cache_content:
+                    print("⚠️ Spotify cache file is empty")
+                    os.remove(".spotify_cache")
+        except Exception as e:
+            print(f"⚠️ Error reading cache file: {e}")
+            try:
+                os.remove(".spotify_cache")
+            except:
+                pass
+    
+    try:
+        sp_oauth = setup_spotify_oauth()
+        # Test the oauth setup
+        test_token = sp_oauth.get_cached_token()
+        if not test_token:
+            print("❌ No valid Spotify token found. Authentication required.")
+            spotify_track = {
+                "title": "Spotify Authentication Required",
+                "artists": "Run setup to authenticate",
+                "album": "HUD35 Setup",
+                "current_position": 0,
+                "duration": 1,
+                "is_playing": False,
+                "main_color": (255, 100, 100),
+                "secondary_color": (200, 100, 100)
+            }
+            update_spotify_layout(spotify_track)
+            if START_SCREEN == "spotify":
+                update_display()
+            return
+    except Exception as e:
+        print(f"❌ Spotify OAuth setup failed: {e}")
         spotify_track = {
-            "title": "Spotify Not Configured",
-            "artists": "Run setup.py to authenticate",
-            "album": "HUD35 Setup Required",
+            "title": "Spotify Setup Error",
+            "artists": "Check configuration",
+            "album": "HUD35 Setup",
             "current_position": 0,
             "duration": 1,
             "is_playing": False,
-            "main_color": (255, 0, 0),
-            "secondary_color": (200, 0, 0)
+            "main_color": (255, 100, 100),
+            "secondary_color": (200, 100, 100)
         }
         update_spotify_layout(spotify_track)
         if START_SCREEN == "spotify":
             update_display()
         return
+
     def get_spotify_client():
         nonlocal token_info
-        current_token = sp_oauth.get_cached_token()
-        if not current_token:
-            print("❌ No cached token found. Re-authentication required.")
-            return None
-        if isinstance(current_token, dict):
-            token_info = current_token
-            access_token = token_info.get('access_token')
-            expires_at = token_info.get('expires_at', 0)
-        else:
-            access_token = current_token
-            expires_at = time.time() + 3600
-        if isinstance(token_info, dict) and expires_at and time.time() > expires_at - 60:
-            try:
-                if 'refresh_token' in token_info:
-                    print("Refreshing Spotify access token...")
-                    new_token_info = sp_oauth.refresh_access_token(token_info['refresh_token'])
-                    if isinstance(new_token_info, dict):
-                        token_info = new_token_info
-                        access_token = token_info.get('access_token')
-                    else:
-                        access_token = new_token_info
-                    print("✅ Spotify token refreshed successfully")
-                else:
-                    print("❌ No refresh token available. Re-authentication required.")
-                    spotify_track = None
-                    update_spotify_layout(None)
-                    if START_SCREEN == "spotify":
-                        update_display()
-                    return None
-            except Exception as e:
-                print(f"❌ Error refreshing Spotify token: {e}")
-                spotify_track = None
-                update_spotify_layout(None)
-                if START_SCREEN == "spotify":
-                    update_display()
+        try:
+            current_token = sp_oauth.get_cached_token()
+            if not current_token:
+                print("❌ No cached token found. Re-authentication required.")
                 return None
-        return spotipy.Spotify(auth=access_token)
+            if not isinstance(current_token, dict):
+                print("⚠️ Token is not in dictionary format, attempting to use raw token...")
+                print("❌ Cannot determine token expiration for raw token, requiring refresh")
+                try:
+                    if os.path.exists(".spotify_cache"):
+                        os.remove(".spotify_cache")
+                except:
+                    pass
+                return None
+            else:
+                token_info = current_token
+            if 'access_token' not in token_info:
+                print("❌ Invalid token structure - missing access_token")
+                return None
+            if 'expires_at' not in token_info:
+                print("❌ Invalid token structure - missing expires_at")
+                token_info['expires_at'] = 0
+            expires_at = token_info.get('expires_at', 0)
+            current_time = time.time()
+            time_remaining = expires_at - current_time
+            if time_remaining <= 120:
+                print(f"🔑 Token expires in {int(time_remaining)} seconds")
+            if current_time > expires_at - 300:
+                print(f"🔄 Token needs refresh ({int(time_remaining)} seconds remaining)")
+                refresh_token = token_info.get('refresh_token')
+                if not refresh_token:
+                    print("❌ No refresh token available. Re-authentication required.")
+                    try:
+                        if os.path.exists(".spotify_cache"):
+                            os.remove(".spotify_cache")
+                    except:
+                        pass
+                    return None
+                max_retries = 3
+                for attempt in range(max_retries):
+                    try:
+                        print(f"🔄 Refreshing Spotify token (attempt {attempt + 1}/{max_retries})...")
+                        new_token_info = sp_oauth.refresh_access_token(refresh_token)
+                        if new_token_info and 'access_token' in new_token_info:
+                            token_info = new_token_info
+                            new_expires_in = token_info.get('expires_in', 3600)
+                            print(f"✅ Spotify token refreshed successfully, expires in {new_expires_in} seconds")
+                            break
+                        else:
+                            print(f"❌ Invalid response from token refresh (attempt {attempt + 1})")
+                            if attempt == max_retries - 1:
+                                raise Exception("Invalid token refresh response")
+                    except Exception as e:
+                        print(f"❌ Token refresh failed (attempt {attempt + 1}): {e}")
+                        if attempt < max_retries - 1:
+                            wait_time = (attempt + 1) * 5
+                            print(f"⏳ Waiting {wait_time} seconds before retry...")
+                            time.sleep(wait_time)
+                        else:
+                            print("❌ All refresh attempts failed")
+                            if 'access_token' in token_info and current_time < expires_at:
+                                print("⚠️ Using existing token despite refresh failure")
+                            else:
+                                return None
+            access_token = token_info.get('access_token')
+            if not access_token:
+                print("❌ No access token available")
+                return None
+            return spotipy.Spotify(auth=access_token)
+        except Exception as e:
+            print(f"❌ Error in get_spotify_client: {e}")
+            return None
+    token_info = sp_oauth.get_cached_token()
     sp = get_spotify_client()
     if sp is None:
         print("Failed to initialize Spotify client.")
@@ -815,13 +886,24 @@ def spotify_loop():
     spotify_error_count = 0
     last_art_url = None
     last_error_time = None
+    initial_token_logged = False
     print("🎵 Spotify loop started successfully")
     while not exit_event.is_set():
         try:
             sp = get_spotify_client()
             if sp is None:
+                print("🔄 No Spotify client available, waiting to retry...")
                 time.sleep(10)
                 continue
+            if not initial_token_logged:
+                current_token = sp_oauth.get_cached_token()
+                if current_token and isinstance(current_token, dict):
+                    expires_at = current_token.get('expires_at', 0)
+                    current_time = time.time()
+                    time_remaining = expires_at - current_time
+                    if time_remaining > 0:
+                        print(f"🔑 Initial token expires in {int(time_remaining)} seconds")
+                initial_token_logged = True
             track = sp.current_user_playing_track()
             if not track or not track.get('item'):
                 if spotify_track is not None:
@@ -836,7 +918,7 @@ def spotify_loop():
                 time.sleep(SPOTIFY_UPDATE_INTERVAL)
                 continue
             if spotify_error_count > 0 and last_error_time is not None:
-                if time.time() - last_error_time > 300:  # 5 minutes in seconds
+                if time.time() - last_error_time > 300:
                     print("✅ 5 minutes without errors, resetting error count")
                     spotify_error_count = 0
                     last_error_time = None
@@ -924,8 +1006,13 @@ def spotify_loop():
         except requests.exceptions.RequestException as e:
             spotify_error_count += 1
             last_error_time = time.time()
-            print(f"📡 Spotify network error ({spotify_error_count}): {e}")
-            time.sleep(min(30, 2 ** spotify_error_count))
+            print(f"🌐 Network error ({spotify_error_count}): {e}")
+            if "Connection aborted" in str(e) or "RemoteDisconnected" in str(e):
+                backoff_time = min(60, 5 * spotify_error_count)
+            else:
+                backoff_time = min(30, 2 ** spotify_error_count)
+            print(f"⏳ Waiting {backoff_time} seconds before retry...")
+            time.sleep(backoff_time)
         except spotipy.exceptions.SpotifyException as e:
             spotify_error_count += 1
             last_error_time = time.time()
@@ -940,6 +1027,7 @@ def spotify_loop():
                 update_spotify_layout(None)
                 if START_SCREEN == "spotify":
                     update_display()
+                spotify_error_count = 0
             time.sleep(min(30, 2 ** spotify_error_count))
         except Exception as e:
             spotify_error_count += 1
@@ -954,7 +1042,7 @@ def spotify_loop():
             update_spotify_layout(None)
             if START_SCREEN == "spotify":
                 update_display()
-            if spotify_error_count >= 10:
+            if spotify_error_count >= 5:
                 spotify_error_count = 0
         time.sleep(SPOTIFY_UPDATE_INTERVAL)
 
@@ -1169,11 +1257,11 @@ def handle_buttons():
             GPIO.setup(button, GPIO.IN, pull_up_down=GPIO.PUD_UP)
         except Exception as e:
             if "busy" in str(e).lower():
-                print(f"⚠️ GPIO {button} already in use, skipping setup.")
+                print(f"⚠️ GPIO {button} already in use, skipping button setup.")
                 return
             else:
                 raise
-    print("Button handler started - 4-button configuration:")
+    print("Button handler started:")
     print("A: Switch screens, B: Switch screens, X: Reset art, Y: Toggle time")
     while not exit_event.is_set():
         for button in buttons:
