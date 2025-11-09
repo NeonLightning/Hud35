@@ -18,6 +18,7 @@ except ImportError:
 
 sys.stdout.reconfigure(line_buffering=True) 
 
+HAS_WAVESHARE_EPD = False
 SCREEN_WIDTH = 480
 SCREEN_HEIGHT = 320
 UPDATE_INTERVAL_WEATHER = 3600
@@ -32,7 +33,7 @@ RGB565_SHIFTS = (8, 3, -3)
 BG_DIR = "./bg"
 DEFAULT_CONFIG = {
     "display": {
-        "type": "st7789",
+        "type": "st7789",  # st7789, framebuffer, or waveshare_epd
         "framebuffer": "/dev/fb1", 
         "rotation": 0,
         "st7789": {
@@ -93,6 +94,9 @@ art_lock = RLock()
 artist_image_lock = RLock()
 scroll_lock = RLock()
 st7789_display = None
+waveshare_epd = None
+waveshare_base_image = None
+partial_refresh_count = 0
 
 def load_config(path="config.toml"):
     if not os.path.exists(path):
@@ -148,6 +152,13 @@ GAMMA = 1.5
 MIN_DISPLAY_INTERVAL = 0.001
 TEXT_METRICS = {}
 DEBOUNCE_TIME = 0.3
+if config["display"]["type"] == "waveshare_epd":
+    try:
+        from waveshare_epd import epd2in13_V3
+        import waveshare_epd.epdconfig as epdconfig
+        HAS_WAVESHARE_EPD = True
+    except ImportError:
+        HAS_WAVESHARE_EPD = False
 
 button_last_press = {BUTTON_A: 0, BUTTON_B: 0, BUTTON_X: 0, BUTTON_Y: 0}
 _gamma_r = np.array([int(((i / 255.0) ** (1 / GAMMA)) * 31 + 0.5) for i in range(256)], dtype=np.uint8)
@@ -168,6 +179,7 @@ artist_on_top = False
 spotify_layout_cache = None
 scrolling_text_cache = {}
 last_display_time = 0
+waveshare_lock = RLock()
 
 def init_text_metrics():
     global TEXT_METRICS
@@ -275,32 +287,6 @@ def cleanup_caches():
 
 def quantize_to_rgb565(r, g, b):
     return (r // 8) * 8, (g // 4) * 4, (b // 8) * 8
-
-def display_image_on_original_fb(image):
-    try:
-        if image.mode != "RGB": image = image.convert("RGB")
-        if image.size != (SCREEN_WIDTH, SCREEN_HEIGHT):
-            full_img = Image.new("RGB", (SCREEN_WIDTH, SCREEN_HEIGHT), "black")
-            full_img.paste(image, (0, 0))
-            image = full_img
-        arr = np.array(image, dtype=np.uint8)
-        r = _gamma_r[arr[:, :, 0]].astype(np.uint16)
-        g = _gamma_g[arr[:, :, 1]].astype(np.uint16)
-        b = _gamma_b[arr[:, :, 2]].astype(np.uint16)
-        rgb565 = (r << 11) | (g << 5) | b
-        output = np.empty((SCREEN_HEIGHT, SCREEN_WIDTH, 2), dtype=np.uint8)
-        output[:, :, 0] = rgb565 & 0xFF
-        output[:, :, 1] = (rgb565 >> 8) & 0xFF
-        with open(FRAMEBUFFER, "wb") as fb:
-            fb.write(output.tobytes())
-    except PermissionError:
-        print(f"Permission denied for {FRAMEBUFFER} - falling back to ST7789")
-        if HAS_ST7789:
-            display_image_on_st7789(image)
-        else:
-            print("No display available")
-    except Exception as e:
-        print(f"Framebuffer error: {e}")
 
 def get_location_via_gpsd(timeout=5, debug=True):
     try:
@@ -830,7 +816,6 @@ def spotify_loop():
         if START_SCREEN == "spotify":
             update_display()
         return
-
     def get_spotify_client():
         nonlocal token_info
         try:
@@ -1029,7 +1014,6 @@ def spotify_loop():
                 last_track_id = current_id
                 if START_SCREEN == "spotify":
                     update_display()
-                    print(f"🎵 Now playing: {new_track['artists']} -- {new_track['title']}")
             else:
                 old_position = spotify_track.get('current_position', 0) if spotify_track else 0
                 new_position = track.get('progress_ms', 0) // 1000
@@ -1331,33 +1315,176 @@ def handle_buttons():
         time.sleep(0.1)
     GPIO.cleanup()
 
+def draw_waveshare_simple(weather_info, spotify_track):
+    display_width = 250
+    display_height = 122
+    img = Image.new('1', (display_width, display_height), 255)
+    draw = ImageDraw.Draw(img)
+    try:
+        font_small = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 12)
+        font_medium = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 14)
+        font_large = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 16)
+    except:
+        font_small = ImageFont.load_default()
+        font_medium = ImageFont.load_default()
+        font_large = ImageFont.load_default()
+    with scroll_lock:
+        if not hasattr(draw_waveshare_simple, 'scroll_offset'):
+            draw_waveshare_simple.scroll_offset = 0
+        if spotify_track:
+            title = spotify_track.get('title', 'No Track')
+            artist = spotify_track.get('artists', 'Unknown Artist')
+            spotify_text = f"{artist} - {title}"
+            text_bbox = draw.textbbox((0, 0), spotify_text, font=font_medium)
+            text_width = text_bbox[2] - text_bbox[0]
+            if text_width > display_width - 10:
+                draw_waveshare_simple.scroll_offset -= 4
+                if draw_waveshare_simple.scroll_offset < -text_width:
+                    draw_waveshare_simple.scroll_offset = display_width
+                text_x = draw_waveshare_simple.scroll_offset
+            else:
+                text_x = (display_width - text_width) // 2
+            draw.text((text_x, 5), spotify_text, font=font_medium, fill=0)
+        else:
+            draw.text((5, 5), "No music playing", font=font_medium, fill=0)
+    if weather_info:
+        temp_text = f"{weather_info['temp']}°C"
+        draw.text((5, 35), temp_text, font=font_large, fill=0)
+        city_text = weather_info['city'][:30]
+        draw.text((5, 55), city_text, font=font_small, fill=0)
+        desc_text = weather_info['description'][:20] 
+        draw.text((5, 70), desc_text, font=font_small, fill=0)
+        if "icon_id" in weather_info:
+            try:
+                icon_url = f"http://openweathermap.org/img/wn/{weather_info['icon_id']}.png"
+                resp = requests.get(icon_url, timeout=5)
+                resp.raise_for_status()
+                icon_img = Image.open(BytesIO(resp.content)).convert("RGBA")
+                icon_img = icon_img.resize((40, 40), Image.LANCZOS)
+                icon_img_bw = icon_img.convert('1')
+                img.paste(icon_img_bw, (display_width - 45, 30))
+            except Exception as e:
+                print(f"Weather icon error: {e}")
+    now = datetime.datetime.now().strftime("%H:%M")
+    time_bbox = draw.textbbox((0, 0), now, font=font_medium)
+    time_width = time_bbox[2] - time_bbox[0]
+    draw.text((display_width - time_width - 5, display_height - 20), now, font=font_medium, fill=0)
+    return img
+
+def init_waveshare_display():
+    global waveshare_epd, waveshare_base_image, partial_refresh_count
+    if not HAS_WAVESHARE_EPD:
+        return None
+    try:
+        waveshare_epd = epd2in13_V3.EPD()
+        waveshare_epd.init()
+        waveshare_epd.Clear(0xFF)
+        waveshare_base_image = None
+        partial_refresh_count = 0
+        print("Waveshare e-paper display initialized")
+        return waveshare_epd
+    except Exception as e:
+        print(f"Waveshare display init failed: {e}")
+        return None
+
+def display_image_on_waveshare(image):
+    global waveshare_epd, waveshare_base_image, partial_refresh_count
+    with waveshare_lock:
+        if waveshare_epd is None:
+            if not init_waveshare_display():
+                return
+        try:
+            if image.size != (250, 122):
+                image = image.resize((250, 122), Image.LANCZOS)
+            if waveshare_base_image is None:
+                waveshare_epd.display(waveshare_epd.getbuffer(image))
+                waveshare_base_image = image.copy()
+                partial_refresh_count = 0
+                return
+            waveshare_epd.displayPartial(waveshare_epd.getbuffer(image))
+            waveshare_base_image = image.copy()
+        except Exception as e:
+            print(f"Waveshare display error: {e}")
+            try:
+                waveshare_epd.init()
+                waveshare_epd.display(waveshare_epd.getbuffer(image))
+                waveshare_base_image = image.copy()
+                partial_refresh_count = 0
+            except:
+                print("Failed to reset waveshare display")
+
 def display_image_on_framebuffer(image):
     global last_display_time
     now = time.time()
-    if now - last_display_time < MIN_DISPLAY_INTERVAL: return
+    if now - last_display_time < MIN_DISPLAY_INTERVAL: 
+        return
     last_display_time = now
     display_type = config.get("display", {}).get("type", "framebuffer")
     if display_type == "st7789" and HAS_ST7789:
         display_image_on_st7789(image)
+    elif display_type == "waveshare_epd" and HAS_WAVESHARE_EPD:
+        display_image_on_waveshare(image)
     else:
         display_image_on_original_fb(image)
 
 def update_display():
     global START_SCREEN
-    if START_SCREEN == "weather":
-        img = draw_weather_image(weather_info)
+    display_type = config.get("display", {}).get("type", "framebuffer")
+    if display_type == "waveshare_epd" and HAS_WAVESHARE_EPD:
+        img = draw_waveshare_simple(weather_info, spotify_track)
     else:
-        img = draw_spotify_image(spotify_track)
+        if START_SCREEN == "weather":
+            img = draw_weather_image(weather_info)
+        else:
+            img = draw_spotify_image(spotify_track)
     display_image_on_framebuffer(img)
+
+def reset_waveshare_display():
+    global waveshare_epd, waveshare_base_image, partial_refresh_count
+    with waveshare_lock:
+        try:
+            if waveshare_epd:
+                waveshare_epd.init()
+                waveshare_epd.Clear(0xFF)
+                waveshare_base_image = None
+                partial_refresh_count = 0
+                print("Waveshare display reset")
+        except Exception as e:
+            print(f"Error resetting waveshare: {e}")
 
 def clear_framebuffer():
     display_type = config.get("display", {}).get("type", "framebuffer")
     if display_type == "st7789" and HAS_ST7789 and st7789_display:
         black_img = Image.new("RGB", (320, 240), "black")
         st7789_display.display(black_img)
+    elif display_type == "waveshare_epd" and HAS_WAVESHARE_EPD and waveshare_epd:
+        white_img = Image.new('1', (250, 122), 255)
+        waveshare_epd.display(waveshare_epd.getbuffer(white_img))
+        waveshare_epd.sleep()
     else:
         with open(FRAMEBUFFER, "wb") as f:
             f.write(b'\x00\x00' * SCREEN_AREA)
+            
+def capture_frames_background():
+    time.sleep(30)
+    print("📸 Starting non-blocking frame capture...")
+    output_dir = "capture_frames"
+    os.makedirs(output_dir, exist_ok=True)
+    display_type = config.get("display", {}).get("type", "framebuffer")
+    for i in range(30):
+        if display_type == "waveshare_epd" and HAS_WAVESHARE_EPD:
+            img = draw_waveshare_simple(weather_info, spotify_track)
+            img_rgb = img.convert("RGB")
+        else:
+            if START_SCREEN == "weather":
+                img_rgb = draw_weather_image(weather_info)
+            else:
+                img_rgb = draw_spotify_image(spotify_track)
+        path = os.path.join(output_dir, f"frame_{i:03d}.png")
+        img_rgb.save(path)
+        print(f"✅ Saved {path}")
+        time.sleep(0.5)
+    print("⏹️ Capture complete.")
 
 def main():
     Thread(target=weather_loop, daemon=True).start()
@@ -1366,15 +1493,18 @@ def main():
     Thread(target=handle_buttons, daemon=True).start()
     Thread(target=animate_images, daemon=True).start()
     Thread(target=animate_text_scroll, daemon=True).start()
+    for _ in range(30):
+        if weather_info is not None or spotify_track is not None:
+            break
+        time.sleep(0.1)
     update_display()
     try:
         while not exit_event.is_set():
-            time.sleep(1)
+            update_display()
     except KeyboardInterrupt:
         pass
     finally:
         exit_event.set()
         clear_framebuffer()
-
 if __name__ == "__main__":
     main()

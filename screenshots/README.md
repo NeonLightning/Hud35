@@ -10,4 +10,8 @@
 
 ![Image of Wifi Config](6.png)
 
-![Active display on screen](display.gif)
+![Active display on 3.12" tft](display.gif)
+
+![Active display on waveshare eink](waveshare.gif)
+
+![Active display on display hat mini](st7789.gif)
