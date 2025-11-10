@@ -5,9 +5,19 @@ from flask import Flask, render_template_string, request, redirect, url_for
 sys.stdout.reconfigure(line_buffering=True)
 app = Flask(__name__)
 
+try:
+    import toml
+    if os.path.exists("config.toml"):
+        config = toml.load("config.toml")
+        AP_IP = config.get("neonwifi", {}).get("ap_ip", "192.168.42.1")
+        AP_SSID = config.get("neonwifi", {}).get("ap_ssid", "WiFi-Manager")
+    else:
+        AP_IP = "192.168.42.1"
+        AP_SSID = "WiFi-Manager"
+except:
+    AP_IP = "192.168.42.1"
+    AP_SSID = "WiFi-Manager"
 WIFI_INTERFACE = "wlan0"
-AP_IP = "192.168.42.1"
-AP_SSID = "WiFi-Manager"
 HOSTAPD_CONF = "/tmp/hostapd.conf"
 DNSMASQ_CONF = "/tmp/dnsmasq.conf"
 SHUTDOWN_FLAG = False

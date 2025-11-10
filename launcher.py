@@ -6,6 +6,12 @@ from collections import Counter
 import os, toml, time, requests, subprocess, sys, signal, urllib.parse, socket, logging, threading, json
 
 app = Flask(__name__)
+@app.after_request
+def add_header(response):
+    response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+    response.headers['Pragma'] = 'no-cache'
+    response.headers['Expires'] = '0'
+    return response
 app.secret_key = 'hud-launcher-secret-key'
 
 CONFIG_PATH = "config.toml"
@@ -44,6 +50,10 @@ DEFAULT_CONFIG = {
         "time_display": True,
         "enable_current_track_display": True
     },
+    "wifi": {
+        "ap_ssid": "Neonwifi-Manager",
+        "ap_ip": "192.168.42.1",
+    },
     "auto_start": {
         "auto_start_hud35": True,
         "auto_start_neonwifi": True,
@@ -59,6 +69,7 @@ neonwifi_process = None
 last_logged_song = None
 
 def load_config():
+    config_was_updated = False
     if not os.path.exists(CONFIG_PATH):
         with open(CONFIG_PATH, 'w') as f:
             toml.dump(DEFAULT_CONFIG, f)
@@ -66,15 +77,24 @@ def load_config():
     try:
         with open(CONFIG_PATH, 'r') as f:
             config = toml.load(f)
-            for section, values in DEFAULT_CONFIG.items():
-                if section not in config:
-                    config[section] = values.copy()
-                else:
-                    for key, value in values.items():
+        for section, default_values in DEFAULT_CONFIG.items():
+            if section not in config:
+                config[section] = default_values.copy()
+                config_was_updated = True
+            else:
+                if isinstance(default_values, dict):
+                    for key, default_value in default_values.items():
                         if key not in config[section]:
-                            config[section][key] = value
-            return config
-    except Exception:
+                            config[section][key] = default_value
+                            config_was_updated = True
+        if config_was_updated:
+            with open(CONFIG_PATH, 'w') as f:
+                toml.dump(config, f)
+            logger = logging.getLogger('Launcher')
+            logger.info("📝 Updated config.toml with missing sections/keys")
+        return config
+    except Exception as e:
+        print(f"Error loading config: {e}")
         return DEFAULT_CONFIG.copy()
 
 def save_config(config):
@@ -263,9 +283,16 @@ def start_hud35():
                     song_info = parse_song_from_log(line)
                     if song_info:
                         log_song_play(song_info)
+        def monitor_current_track_state():
+            while hud35_process and hud35_process.poll() is None:
+                log_current_track_state()
+                time.sleep(1)
         output_thread = threading.Thread(target=log_hud35_output)
         output_thread.daemon = True
         output_thread.start()
+        track_monitor_thread = threading.Thread(target=monitor_current_track_state)
+        track_monitor_thread.daemon = True
+        track_monitor_thread.start()
         time.sleep(2)
         if hud35_process.poll() is None:
             return True, "HUD35 started successfully"
@@ -604,20 +631,6 @@ SETUP_HTML = """
             padding: 15px;
             margin-top: 30px;
         }
-        .log-viewer-controls {
-            display: flex;
-            gap: 10px;
-            align-items: center;
-            margin-top: 20px;
-            padding: 15px;
-            background: var(--bg-tertiary);
-            border-radius: 8px;
-            justify-content: center;
-        }
-        .log-viewer-controls input {
-            width: 80px;
-            padding: 8px;
-        }
     </style>
 </head>
 <body data-theme="{{ ui_config.theme }}">
@@ -669,123 +682,15 @@ SETUP_HTML = """
                 {% endif %}
             </div>
         </div>
-        <div class="log-viewer-controls">
+        <div class="section">
             <a href="/music_stats">
                 <button type="button" class="btn-secondary">📊 Music Statistics</button>
             </a>
+            <a href="/advanced_config">
+                <button type="button" class="btn-secondary">⚙️ Advanced Configuration</button>
+            </a>
         </div>
         <form method="POST" action="/save_all_config">
-            <div class="toggle-switch">
-                <input type="checkbox" id="enable_current_track_display" name="enable_current_track_display" {% if config.settings.enable_current_track_display %}checked{% endif %}>
-                <label for="enable_current_track_display">Enable current track display</label>
-                <small style="display: block; margin-left: 25px; color: var(--text-secondary);">(Shows current track on display and updates the current track file for the web UI)</small>
-            </div>
-            <div class="section">
-                <h2>🔑 API Configuration</h2>
-                <div class="instructions">
-                    <p><strong>Get your API keys:</strong></p>
-                    <p>• <a href="https://openweathermap.org/api" target="_blank">OpenWeatherMap</a> - Free weather API</p>
-                    <p>• <a href="https://developers.google.com/maps/documentation/geolocation" target="_blank">Google Geolocation API</a> - Optional, for precise location</p>
-                    <p>• <a href="https://developer.spotify.com/dashboard" target="_blank">Spotify Developer Dashboard</a> - For music integration</p>
-                </div>
-                <div class="settings-grid">
-                    <div>
-                        <h3>Weather APIs</h3>
-                        <div class="form-group">
-                            <label for="openweather">OpenWeatherMap API Key:</label>
-                            <input type="text" id="openweather" name="openweather" value="{{ config.api_keys.openweather }}" placeholder="Enter your OpenWeatherMap API key">
-                        </div>
-                        <div class="form-group">
-                            <label for="google_geo">Google Geolocation API Key:</label>
-                            <input type="text" id="google_geo" name="google_geo" value="{{ config.api_keys.google_geo }}" placeholder="Enter Google Geolocation API key">
-                            <small>Optional - for precise location without GPS</small>
-                        </div>
-                    </div>
-                    <div>
-                        <h3>Spotify API</h3>
-                        {% if spotify_configured %}
-                            {% if spotify_authenticated %}
-                            <div class="status success">
-                                <p>✅ Spotify is authenticated!</p>
-                            </div>
-                            {% else %}
-                            <div class="status warning">
-                                <p>⚠️ Spotify credentials saved but not authenticated.</p>
-                                <a href="/spotify_auth">
-                                    <button type="button" class="btn-warning">🔑 Authenticate Spotify</button>
-                                </a>
-                            </div>
-                            {% endif %}
-                        {% endif %}
-                        <div class="form-group">
-                            <label for="client_id">Spotify Client ID:</label>
-                            <input type="text" id="client_id" name="client_id" value="{{ config.api_keys.client_id }}" placeholder="Enter your Spotify Client ID">
-                        </div>
-                        <div class="form-group">
-                            <label for="client_secret">Spotify Client Secret:</label>
-                            <input type="password" id="client_secret" name="client_secret" value="{{ config.api_keys.client_secret }}" placeholder="Enter your Spotify Client Secret">
-                        </div>
-                    </div>
-                </div>
-            </div>
-            <div class="section">
-                <h2>📍 Location & Display Settings</h2>
-                <div class="settings-grid">
-                    <div>
-                        <h3>Location Services</h3>
-                        <div class="form-group">
-                            <label for="fallback_city">Fallback City:</label>
-                            <input type="text" id="fallback_city" name="fallback_city" value="{{ config.settings.fallback_city }}" placeholder="e.g., London,UK">
-                            <small>Used when location services are unavailable</small>
-                        </div>
-                        <div class="toggle-switch">
-                            <input type="checkbox" id="use_gpsd" name="use_gpsd" {% if config.settings.use_gpsd %}checked{% endif %}>
-                            <label for="use_gpsd">Use GPSD for location</label>
-                            <small style="display: block; margin-left: 25px; color: var(--text-secondary);">(Requires GPS hardware and gpsd service)</small>
-                        </div>
-                        <div class="toggle-switch">
-                            <input type="checkbox" id="use_google_geo" name="use_google_geo" {% if config.settings.use_google_geo %}checked{% endif %}>
-                            <label for="use_google_geo">Use Google Geolocation</label>
-                            <small style="display: block; margin-left: 25px; color: var(--text-secondary);">(More accurate than IP-based location)</small>
-                        </div>
-                    </div>
-                    <div>
-                        <h3>Display Settings</h3>
-                        <div class="form-group">
-                            <label for="display_type">Display Type:</label>
-                            <select id="display_type" name="display_type">
-                                <option value="framebuffer" {% if config.display.type == "framebuffer" %}selected{% endif %}>Framebuffer (TFT 3.5")</option>
-                                <option value="st7789" {% if config.display.type == "st7789" %}selected{% endif %}>ST7789 (DisplayHatMini)</option>
-                            </select>
-                            <small>Select your display hardware</small>
-                        </div>
-                        <div class="form-group">
-                            <label for="rotation">Rotation:</label>
-                            <select id="rotation" name="rotation">
-                                <option value="0" {% if config.display.rotation == 0 %}selected{% endif %}>0°</option>
-                                <option value="180" {% if config.display.rotation == 180 %}selected{% endif %}>180°</option>
-                            </select>
-                            <small>Screen rotation (applies to both display types)</small>
-                        </div>
-                        <div class="form-group">
-                            <label for="start_screen">Start Screen:</label>
-                            <select id="start_screen" name="start_screen">
-                                <option value="weather" {% if config.settings.start_screen == "weather" %}selected{% endif %}>Weather</option>
-                                <option value="spotify" {% if config.settings.start_screen == "spotify" %}selected{% endif %}>Spotify</option>
-                            </select>
-                        </div>
-                        <div class="toggle-switch">
-                            <input type="checkbox" id="time_display" name="time_display" {% if config.settings.time_display %}checked{% endif %}>
-                            <label for="time_display">Show time display</label>
-                        </div>
-                        <div class="form-group">
-                            <label for="framebuffer_device">Framebuffer Device:</label>
-                            <input type="text" id="framebuffer" name="framebuffer" value="{{ config.settings.framebuffer }}" placeholder="e.g., /dev/fb1">
-                            <small>Path to framebuffer device (e.g. /dev/fb0, /dev/fb1)</small>
-                        </div>
-                    </div>
-                </div>
-            </div>
             <div class="section">
                 <h2>⚡ Auto-start Configuration</h2>
                 <div class="toggle-switch">
@@ -798,12 +703,12 @@ SETUP_HTML = """
                 </div>
                 <div class="toggle-switch">
                     <input type="checkbox" id="check_internet" name="check_internet" {% if auto_config.check_internet %}checked{% endif %}>
-                    <label for="check_internet">Wait for internet connection before starting Hud35</label>
+                    <label for="check_internet">Wait for internet connection before starting HUD35</label>
                 </div>
             </div>
-            <button type="submit" class="save-all-button">💾 Save All Settings</button>
+            <button type="submit" class="save-all-button">💾 Save Auto-start Settings</button>
         </form>
-        <div class="log-viewer-controls">
+        <div class="section">
             <form action="/view_logs" method="GET" style="display: flex; gap: 10px; align-items: center;">
                 <button type="submit" class="btn-secondary">📋 View Logs</button>
                 <label for="log_lines" style="color: var(--text-primary);">Lines:</label>
@@ -1183,89 +1088,190 @@ MUSIC_STATS_HTML = """
             </div>
         </div>
     </div>
-    <script>
-        function toggleTheme() {
-            const currentTheme = document.body.getAttribute('data-theme');
-            const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
-            const form = document.createElement('form');
-            form.method = 'POST';
-            form.action = '/toggle_theme';
-            const themeInput = document.createElement('input');
-            themeInput.type = 'hidden';
-            themeInput.name = 'theme';
-            themeInput.value = newTheme;
-            form.appendChild(themeInput);
-            document.body.appendChild(form);
-            form.submit();
+<script>
+    function toggleTheme() {
+        const currentTheme = document.body.getAttribute('data-theme');
+        const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+        const form = document.createElement('form');
+        form.method = 'POST';
+        form.action = '/toggle_theme';
+        const themeInput = document.createElement('input');
+        themeInput.type = 'hidden';
+        themeInput.name = 'theme';
+        themeInput.value = newTheme;
+        form.appendChild(themeInput);
+        document.body.appendChild(form);
+        form.submit();
+    }
+    function clearSongLogs() {
+        if (confirm('Are you sure you want to clear all song history? This cannot be undone.')) {
+            fetch('/clear_song_logs', { method: 'POST' })
+                .then(() => {
+                    location.reload();
+                });
         }
-        function clearSongLogs() {
-            if (confirm('Are you sure you want to clear all song history? This cannot be undone.')) {
-                fetch('/clear_song_logs', { method: 'POST' })
-                    .then(() => {
-                        location.reload();
-                    });
+    }
+    function setupLiveStats() {
+        let currentPeriod = new URLSearchParams(window.location.search).get('period') || '1hour';
+        let eventSource = null;
+        let lastStatsHash = null;
+        function connect() {
+            if (eventSource) {
+                eventSource.close();
             }
-        }
-        function setupCurrentTrackSSE() {
-            const eventSource = new EventSource('/stream/current_track');
+            eventSource = new EventSource(`/stream/music_stats?period=${currentPeriod}`);
             eventSource.onmessage = function(event) {
-                const trackData = JSON.parse(event.data);
-                updateCurrentTrackDisplay(trackData);
+                const stats = JSON.parse(event.data);
+                const currentHash = JSON.stringify({
+                    total: stats.total_plays,
+                    songs: stats.unique_songs,
+                    artists: stats.unique_artists
+                });
+                if (currentHash !== lastStatsHash) {
+                    document.querySelector('.stat-card:nth-child(1) .stat-number').textContent = stats.total_plays;
+                    document.querySelector('.stat-card:nth-child(2) .stat-number').textContent = stats.unique_songs;
+                    document.querySelector('.stat-card:nth-child(3) .stat-number').textContent = stats.unique_artists;
+                    if (lastStatsHash !== null) {
+                        refreshCharts(false);
+                    }
+                    
+                    lastStatsHash = currentHash;
+                }
             };
             eventSource.onerror = function(event) {
-                console.error('SSE error:', event);
-                setTimeout(setupCurrentTrackSSE, 5000);
+                console.error('Stats SSE error:', event);
+                setTimeout(connect, 5000);
             };
-            return eventSource;
         }
-        function updateCurrentTrackDisplay(trackData) {
-            const container = document.getElementById('currentTrackContainer');
-            if (trackData.has_track) {
-                container.innerHTML = `
-                    <div style="display: flex; align-items: center; gap: 20px; padding: 15px; background: var(--card-bg); border-radius: 8px; border-left: 4px solid var(--accent-color);">
-                        <div style="flex: 1;">
-                            <div style="font-size: 18px; font-weight: bold; margin-bottom: 5px;">${trackData.song}</div>
-                            <div style="color: var(--text-secondary); margin-bottom: 5px;">by ${trackData.artist}</div>
-                            <div style="color: var(--text-secondary); font-size: 14px;">on ${trackData.album}</div>
-                        </div>
-                        <div style="text-align: right;">
-                            <div style="font-size: 14px; margin-bottom: 5px;">
-                                ${trackData.progress} / ${trackData.duration}
-                            </div>
-                            <div style="font-size: 12px; color: ${trackData.is_playing ? 'var(--accent-color)' : 'var(--text-secondary)'};">
-                                ${trackData.is_playing ? '▶️ Playing' : '⏸️ Paused'}
-                            </div>
-                        </div>
-                    </div>
-                `;
-            } else {
-                container.innerHTML = `
-                    <div style="padding: 20px; text-align: center; background: var(--card-bg); border-radius: 8px; color: var(--text-secondary);">
-                        No track currently playing
-                    </div>
-                `;
-            }
-        }
-        document.addEventListener('DOMContentLoaded', function() {
-            const bars = document.querySelectorAll('.bar-fill, .artist-bar-fill');
-            bars.forEach(bar => {
-                const width = bar.style.width;
-                bar.style.width = '0%';
-                setTimeout(() => {
-                    bar.style.width = width;
-                }, 100);
-            });
-            setupCurrentTrackSSE();
-            fetch('/api/current_track')
-                .then(response => response.json())
-                .then(data => {
-                    updateCurrentTrackDisplay(data.track);
-                })
-                .catch(error => {
-                    console.error('Error fetching initial track:', error);
-                });
+        connect();
+        document.querySelector('select[name="period"]').addEventListener('change', function() {
+            currentPeriod = this.value;
+            lastStatsHash = null; // Reset hash when period changes
+            const url = new URL(window.location);
+            url.searchParams.set('period', currentPeriod);
+            window.history.pushState({}, '', url);
+            connect();
+            refreshCharts(true);
         });
-    </script>
+    }
+    function refreshCharts(shouldAnimate = true) {
+        const period = new URLSearchParams(window.location.search).get('period') || '1hour';
+        const lines = new URLSearchParams(window.location.search).get('lines') || 1000;
+        fetch(`/music_stats_data?period=${period}&lines=${lines}`)
+            .then(response => response.json())
+            .then(data => {
+                updateCharts(data, shouldAnimate);
+            })
+            .catch(error => {
+                console.error('Error refreshing charts:', error);
+            });
+    }
+    function updateCharts(data, shouldAnimate = true) {
+        const songChart = document.getElementById('songChart');
+        songChart.innerHTML = '';
+        data.song_chart_items.forEach((item, index) => {
+            const [label, count, color] = item;
+            const [songName, artistName] = label.split(' - ');
+            const percentage = data.song_chart_items[0][1] > 0 ? (count / data.song_chart_items[0][1]) * 100 : 0;
+            const barItem = document.createElement('div');
+            barItem.className = 'bar-item';
+            barItem.innerHTML = `
+                <div class="song-name" title="${label}">${index + 1}. ${songName || label}</div>
+                <div class="artist-name" title="${artistName || 'Unknown Artist'}">
+                    ${artistName || 'Unknown Artist'}
+                </div>
+                <div class="bar-track-container">
+                    <div class="bar-track">
+                        <div class="bar-fill" style="width: ${shouldAnimate ? '0%' : percentage + '%'}; background: ${color};"></div>
+                    </div>
+                    <div class="bar-count">${count}</div>
+                </div>
+            `;
+            songChart.appendChild(barItem);
+        });
+        const artistChart = document.getElementById('artistChart');
+        artistChart.innerHTML = '';
+        data.artist_chart_items.forEach((item, index) => {
+            const [label, count, color] = item;
+            const percentage = data.artist_chart_items[0][1] > 0 ? (count / data.artist_chart_items[0][1]) * 100 : 0;
+            const barItem = document.createElement('div');
+            barItem.className = 'artist-bar-item';
+            barItem.innerHTML = `
+                <div class="artist-name-full" title="${label}">${index + 1}. ${label}</div>
+                <div class="artist-bar-track">
+                    <div class="artist-bar-fill" style="width: ${shouldAnimate ? '0%' : percentage + '%'}; background: ${color};"></div>
+                </div>
+                <div class="artist-bar-count">${count}</div>
+            `;
+            artistChart.appendChild(barItem);
+        });
+        if (shouldAnimate) {
+            setTimeout(() => {
+                const bars = document.querySelectorAll('.bar-fill, .artist-bar-fill');
+                bars.forEach(bar => {
+                    const computedStyle = window.getComputedStyle(bar);
+                    const targetWidth = computedStyle.width;
+                    bar.style.width = '0%';
+                    setTimeout(() => {
+                        bar.style.width = targetWidth;
+                    }, 100);
+                });
+            }, 50);
+        }
+    }
+    function setupCurrentTrackSSE() {
+        const eventSource = new EventSource('/stream/current_track');
+        eventSource.onmessage = function(event) {
+            const trackData = JSON.parse(event.data);
+            updateCurrentTrackDisplay(trackData);
+        };
+        eventSource.onerror = function(event) {
+            console.error('SSE error:', event);
+            setTimeout(setupCurrentTrackSSE, 5000);
+        };
+        return eventSource;
+    }
+    function updateCurrentTrackDisplay(trackData) {
+        const container = document.getElementById('currentTrackContainer');
+        if (trackData.has_track) {
+            container.innerHTML = `
+                <div style="display: flex; align-items: center; gap: 20px; padding: 15px; background: var(--card-bg); border-radius: 8px; border-left: 4px solid var(--accent-color);">
+                    <div style="flex: 1;">
+                        <div style="font-size: 18px; font-weight: bold; margin-bottom: 5px;">${trackData.song}</div>
+                        <div style="color: var(--text-secondary); margin-bottom: 5px;">by ${trackData.artist}</div>
+                        <div style="color: var(--text-secondary); font-size: 14px;">on ${trackData.album}</div>
+                    </div>
+                    <div style="text-align: right;">
+                        <div style="font-size: 14px; margin-bottom: 5px;">
+                            ${trackData.progress} / ${trackData.duration}
+                        </div>
+                        <div style="font-size: 12px; color: ${trackData.is_playing ? 'var(--accent-color)' : 'var(--text-secondary)'};">
+                            ${trackData.is_playing ? '▶️ Playing' : '⏸️ Paused'}
+                        </div>
+                    </div>
+                </div>
+            `;
+        } else {
+            container.innerHTML = `
+                <div style="padding: 20px; text-align: center; background: var(--card-bg); border-radius: 8px; color: var(--text-secondary);">
+                    No track currently playing
+                </div>
+            `;
+        }
+    }
+    document.addEventListener('DOMContentLoaded', function() {
+        setupLiveStats();
+        setupCurrentTrackSSE();
+        fetch('/api/current_track')
+            .then(response => response.json())
+            .then(data => {
+                updateCurrentTrackDisplay(data.track);
+            })
+            .catch(error => {
+                console.error('Error fetching initial track:', error);
+            });
+    });
+</script>
 </body>
 </html>
 """
@@ -1306,30 +1312,36 @@ def toggle_theme():
     save_config(config)
     return redirect(url_for('index'))
 
+@app.route('/toggle_themeac', methods=['POST'])
+def toggle_themeac():
+    config = load_config()
+    new_theme = request.form.get('theme', 'dark')
+    if 'ui' not in config:
+        config['ui'] = {}
+    config['ui']['theme'] = new_theme
+    save_config(config)
+    return redirect(url_for('advanced_config'))
+
 @app.route('/save_all_config', methods=['POST'])
 def save_all_config():
     config = load_config()
-    config["api_keys"]["openweather"] = request.form.get('openweather', '')
-    config["api_keys"]["google_geo"] = request.form.get('google_geo', '')
-    config["api_keys"]["client_id"] = request.form.get('client_id', '')
-    config["api_keys"]["client_secret"] = request.form.get('client_secret', '')
-    config["settings"]["fallback_city"] = request.form.get('fallback_city', '')
-    config["settings"]["start_screen"] = request.form.get('start_screen', 'weather')
-    config["settings"]["use_gpsd"] = 'use_gpsd' in request.form
-    config["settings"]["use_google_geo"] = 'use_google_geo' in request.form
-    config["settings"]["time_display"] = 'time_display' in request.form
-    config["settings"]["enable_current_track_display"] = 'enable_current_track_display' in request.form
-    config["display"]["type"] = request.form.get('display_type', 'framebuffer')
-    config["display"]["rotation"] = int(request.form.get('rotation', 0))
+    auto_start_hud35 = 'auto_start_hud35' in request.form
+    auto_start_neonwifi = 'auto_start_neonwifi' in request.form
     config["auto_start"] = {
-        "auto_start_hud35": 'auto_start_hud35' in request.form,
-        "auto_start_neonwifi": 'auto_start_neonwifi' in request.form,
-        "check_internet": 'check_internet' in request.form
+        "auto_start_hud35": auto_start_hud35,
+        "auto_start_neonwifi": auto_start_neonwifi
     }
     save_config(config)
-    stop_hud35()
-    time.sleep(3)
-    start_hud35()
+    if is_hud35_running():
+        stop_hud35()
+        time.sleep(3)
+    if auto_start_hud35 == True:
+        start_hud35()
+    if is_neonwifi_running():
+        stop_neonwifi()
+        time.sleep(3)
+    if auto_start_neonwifi == True:
+        start_neonwifi()
     flash('success', 'All settings saved successfully!')
     return redirect(url_for('index'))
 
@@ -1695,6 +1707,7 @@ def clear_logs():
     except Exception as e:
         return f'Error clearing logs: {str(e)}', 500
 
+
 @app.route('/music_stats')
 def music_stats():
     config = load_config()
@@ -1721,6 +1734,44 @@ def music_stats():
                                 unique_artists=len(artist_stats),
                                 enable_current_track_display=enable_current_track,
                                 ui_config=ui_config)
+
+@app.route('/music_stats_data')
+def music_stats_data():
+    period = request.args.get('period', '1hour')
+    try:
+        lines = int(request.args.get('lines', 1000))
+    except:
+        lines = 1000
+    songs_data = load_song_data(period)
+    song_stats, artist_stats = generate_music_stats(songs_data)
+    song_chart_data = generate_chart_data(song_stats, 'Songs')
+    artist_chart_data = generate_chart_data(artist_stats, 'Artists')
+    song_chart_items = list(zip(song_chart_data['labels'], song_chart_data['data'], song_chart_data['colors']))
+    artist_chart_items = list(zip(artist_chart_data['labels'], artist_chart_data['data'], artist_chart_data['colors']))
+    return {
+        'song_chart_items': song_chart_items,
+        'artist_chart_items': artist_chart_items,
+        'total_plays': len(songs_data),
+        'unique_songs': len(song_stats),
+        'unique_artists': len(artist_stats)
+    }
+
+@app.route('/stream/music_stats')
+def stream_music_stats():
+    period = request.args.get('period', '1hour')
+    def generate():
+        while True:
+            songs_data = load_song_data(period)
+            song_stats, artist_stats = generate_music_stats(songs_data)
+            stats_data = {
+                'total_plays': len(songs_data),
+                'unique_songs': len(song_stats),
+                'unique_artists': len(artist_stats),
+                'timestamp': datetime.now().isoformat()
+            }
+            yield f"data: {json.dumps(stats_data)}\n\n"
+            time.sleep(2)
+    return Response(generate(), mimetype='text/event-stream')
 
 @app.route('/stream/current_track')
 def stream_current_track():
@@ -1761,6 +1812,658 @@ def clear_song_logs():
         return 'Song logs cleared', 200
     except Exception as e:
         return f'Error clearing song logs: {str(e)}', 500
+
+@app.route('/advanced_config')
+def advanced_config():
+    config = load_config()
+    config_ready = is_config_ready()
+    spotify_configured = bool(config["api_keys"]["client_id"] and config["api_keys"]["client_secret"])
+    spotify_authenticated, _ = check_spotify_auth()
+    ui_config = config.get("ui", {"theme": "dark"})
+    ADVANCED_CONFIG_HTML = """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Advanced Configuration - HUD35 Launcher</title>
+    <style>
+        :root {
+            --bg-primary: #1a1a1a;
+            --bg-secondary: #2d2d2d;
+            --bg-tertiary: #3d3d3d;
+            --text-primary: #ffffff;
+            --text-secondary: #b0b0b0;
+            --accent-color: #007bff;
+            --accent-hover: #0056b3;
+            --border-color: #444444;
+            --success-bg: #155724;
+            --success-border: #c3e6cb;
+            --error-bg: #721c24;
+            --error-border: #f5c6cb;
+            --warning-bg: #856404;
+            --warning-border: #ffeaa7;
+            --info-bg: #004085;
+            --info-border: #b3d7ff;
+        }
+        [data-theme="light"] {
+            --bg-primary: #ffffff;
+            --bg-secondary: #f8f9fa;
+            --bg-tertiary: #e9ecef;
+            --text-primary: #212529;
+            --text-secondary: #6c757d;
+            --accent-color: #007bff;
+            --accent-hover: #0056b3;
+            --border-color: #dee2e6;
+            --success-bg: #d4edda;
+            --success-border: #c3e6cb;
+            --error-bg: #f8d7da;
+            --error-border: #f5c6cb;
+            --warning-bg: #fff3cd;
+            --warning-border: #ffeaa7;
+            --info-bg: #cce7ff;
+            --info-border: #b3d7ff;
+        }
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1000px;
+            margin: 0 auto;
+            padding: 20px;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            transition: all 0.3s ease;
+        }
+        .container {
+            background: var(--bg-secondary);
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            border: 1px solid var(--border-color);
+        }
+        h1 {
+            text-align: center;
+            color: var(--text-primary);
+            margin-bottom: 30px;
+        }
+        .section {
+            background: var(--bg-tertiary);
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 30px;
+            border-left: 4px solid var(--accent-color);
+        }
+        .section h2 {
+            margin-top: 0;
+            color: var(--text-primary);
+            border-bottom: 2px solid var(--border-color);
+            padding-bottom: 10px;
+        }
+        .form-group {
+            margin-bottom: 20px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+            color: var(--text-primary);
+        }
+        input[type="text"], input[type="number"], input[type="password"], textarea, select {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid var(--border-color);
+            border-radius: 5px;
+            box-sizing: border-box;
+            font-size: 16px;
+            background: var(--bg-secondary);
+            color: var(--text-primary);
+        }
+        input[type="text"]:focus, input[type="number"]:focus, input[type="password"]:focus, textarea:focus, select:focus {
+            border-color: var(--accent-color);
+            outline: none;
+        }
+        .instructions a {
+            color: var(--text-primary);
+            text-decoration: underline;
+        }
+        .toggle-switch {
+            display: flex;
+            align-items: center;
+            margin: 15px 0;
+        }
+        .toggle-switch input[type="checkbox"] {
+            margin-right: 10px;
+            transform: scale(1.2);
+        }
+        .toggle-switch label {
+            margin-bottom: 0;
+        }
+        small {
+            color: var(--text-secondary);
+            display: block;
+            margin-top: 5px;
+        }
+        .config-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+        button {
+            background: var(--accent-color);
+            color: white;
+            border: none;
+            padding: 12px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+            margin: 5px;
+            transition: all 0.3s ease;
+        }
+        button:hover {
+            background: var(--accent-hover);
+        }
+        .btn-secondary {
+            background: #6c757d;
+        }
+        .btn-success {
+            background: #28a745;
+        }
+        .btn-danger {
+            background: #dc3545;
+        }
+        .status {
+            padding: 10px;
+            border-radius: 5px;
+            margin: 10px 0;
+            text-align: center;
+        }
+        .status.success {
+            background: var(--success-bg);
+            color: var(--text-primary);
+            border: 1px solid var(--success-border);
+        }
+        .status.error {
+            background: var(--error-bg);
+            color: var(--text-primary);
+            border: 1px solid var(--error-border);
+        }
+        .theme-toggle {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background: var(--accent-color);
+            color: white;
+            border: none;
+            padding: 8px 12px;
+            border-radius: 20px;
+            cursor: pointer;
+            font-size: 12px;
+            z-index: 1000;
+        }
+        .button-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin: 20px 0;
+        }
+        .button-config {
+            background: var(--bg-secondary);
+            padding: 15px;
+            border-radius: 8px;
+            border: 1px solid var(--border-color);
+        }
+        .button-config h4 {
+            margin-top: 0;
+            color: var(--accent-color);
+        }
+        .font-config {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+        }
+        .font-group {
+            background: var(--bg-secondary);
+            padding: 15px;
+            border-radius: 8px;
+            border: 1px solid var(--border-color);
+        }
+        .instructions {
+            background: var(--info-bg);
+            padding: 15px;
+            border-radius: 5px;
+            margin-bottom: 15px;
+            font-size: 14px;
+            color: var(--text-primary);
+            border: 1px solid var(--info-border);
+        }
+    </style>
+</head>
+<body data-theme="{{ ui_config.theme }}">
+    <button class="theme-toggle" onclick="toggleTheme()">
+        {% if ui_config.theme == 'dark' %}
+        ☀️
+        {% else %}
+        🌙
+        {% endif %}
+    </button>
+    <div class="container">
+        <h1>⚙️ Advanced Configuration</h1>
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="status {{ category }}">{{ message }}</div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+        <form method="POST" action="/save_advanced_config">
+            <div class="section">
+                <h2>🔑 API Configuration</h2>
+                <div class="instructions">
+                    <p><strong>Get your API keys:</strong></p>
+                    <p>• <a href="https://openweathermap.org/api" target="_blank">OpenWeatherMap</a> - Free weather API</p>
+                    <p>• <a href="https://developers.google.com/maps/documentation/geolocation" target="_blank">Google Geolocation API</a> - Optional, for precise location</p>
+                    <p>• <a href="https://developer.spotify.com/dashboard" target="_blank">Spotify Developer Dashboard</a> - For music integration</p>
+                </div>
+                {% if spotify_configured %}
+                    {% if spotify_authenticated %}
+                    <div class="status success">
+                        <p>✅ Spotify is authenticated!</p>
+                    </div>
+                    {% else %}
+                    <div class="status warning">
+                        <p>⚠️ Spotify credentials saved but not authenticated.</p>
+                        <a href="/spotify_auth">
+                            <button type="button" class="btn-warning">🔑 Authenticate Spotify</button>
+                        </a>
+                    </div>
+                    {% endif %}
+                {% endif %}
+                <div class="config-grid">
+                    <div>
+                        <h3>Weather APIs</h3>
+                        <div class="form-group">
+                            <label for="openweather">OpenWeatherMap API Key:</label>
+                            <input type="text" id="openweather" name="openweather" value="{{ config.api_keys.openweather }}" placeholder="Enter your OpenWeatherMap API key">
+                        </div>
+                        <div class="form-group">
+                            <label for="google_geo">Google Geolocation API Key:</label>
+                            <input type="text" id="google_geo" name="google_geo" value="{{ config.api_keys.google_geo }}" placeholder="Enter Google Geolocation API key">
+                            <small>Optional - for precise location without GPS</small>
+                        </div>
+                    </div>
+                    <div>
+                        <h3>Spotify API</h3>
+                        <div class="form-group">
+                            <label for="client_id">Spotify Client ID:</label>
+                            <input type="text" id="client_id" name="client_id" value="{{ config.api_keys.client_id }}" placeholder="Enter your Spotify Client ID">
+                        </div>
+                        <div class="form-group">
+                            <label for="client_secret">Spotify Client Secret:</label>
+                            <input type="password" id="client_secret" name="client_secret" value="{{ config.api_keys.client_secret }}" placeholder="Enter your Spotify Client Secret">
+                        </div>
+                        <div class="form-group">
+                            <label for="redirect_uri">Spotify Redirect URI:</label>
+                            <input type="text" id="redirect_uri" name="redirect_uri" value="{{ config.api_keys.redirect_uri }}">
+                            <small>OAuth redirect URI for Spotify</small>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="section">
+                <h2>📍 Location & Display Settings</h2>
+                <div class="config-grid">
+                    <div>
+                        <h3>Location Services</h3>
+                        <div class="form-group">
+                            <label for="fallback_city">Fallback City:</label>
+                            <input type="text" id="fallback_city" name="fallback_city" value="{{ config.settings.fallback_city }}" placeholder="e.g., London,UK">
+                            <small>Used when location services are unavailable</small>
+                        </div>
+                        <div class="toggle-switch">
+                            <input type="checkbox" id="use_gpsd" name="use_gpsd" {% if config.settings.use_gpsd %}checked{% endif %}>
+                            <label for="use_gpsd">Use GPSD for location</label>
+                            <small style="display: block; margin-left: 25px; color: var(--text-secondary);">(Requires GPS hardware and gpsd service)</small>
+                        </div>
+                        <div class="toggle-switch">
+                            <input type="checkbox" id="use_google_geo" name="use_google_geo" {% if config.settings.use_google_geo %}checked{% endif %}>
+                            <label for="use_google_geo">Use Google Geolocation</label>
+                            <small style="display: block; margin-left: 25px; color: var(--text-secondary);">(More accurate than IP-based location)</small>
+                        </div>
+                    </div>
+                    <div>
+                        <h3>Display Settings</h3>
+                        <div class="form-group">
+                            <label for="display_type">Display Type:</label>
+                            <select id="display_type" name="display_type">
+                                <option value="framebuffer" {% if config.display.type == "framebuffer" %}selected{% endif %}>Framebuffer (TFT 3.5")</option>
+                                <option value="st7789" {% if config.display.type == "st7789" %}selected{% endif %}>ST7789 (DisplayHatMini)</option>
+                                <option value="waveshare_epd" {% if config.display.type == "waveshare_epd" %}selected{% endif %}>Waveshare E-Paper</option>
+                            </select>
+                            <small>Select your display hardware type</small>
+                        </div>
+                        <div class="form-group">
+                            <label for="framebuffer_device">Framebuffer Device:</label>
+                            <input type="text" id="framebuffer_device" name="framebuffer_device" value="{{ config.display.framebuffer }}" placeholder="/dev/fb1">
+                            <small>Path to framebuffer device (e.g., /dev/fb0, /dev/fb1)</small>
+                        </div>
+                        <div class="form-group">
+                            <label for="rotation">Rotation:</label>
+                            <select id="rotation" name="rotation">
+                                <option value="0" {% if config.display.rotation == 0 %}selected{% endif %}>0°</option>
+                                <option value="180" {% if config.display.rotation == 180 %}selected{% endif %}>180°</option>
+                            </select>
+                            <small>Screen rotation angle</small>
+                        </div>
+                        <div class="form-group">
+                            <label for="start_screen">Start Screen:</label>
+                            <select id="start_screen" name="start_screen">
+                                <option value="weather" {% if config.settings.start_screen == "weather" %}selected{% endif %}>Weather</option>
+                                <option value="spotify" {% if config.settings.start_screen == "spotify" %}selected{% endif %}>Spotify</option>
+                                <option value="time" {% if config.settings.start_screen == "time" %}selected{% endif %}>Time</option>
+                            </select>
+                            <small>Default screen to show on startup</small>
+                        </div>
+                        <div class="toggle-switch">
+                            <input type="checkbox" id="time_display" name="time_display" {% if config.settings.time_display %}checked{% endif %}>
+                            <label for="time_display">Show time display</label>
+                        </div>
+                        <div class="toggle-switch">
+                            <input type="checkbox" id="enable_current_track_display" name="enable_current_track_display" {% if config.settings.enable_current_track_display %}checked{% endif %}>
+                            <label for="enable_current_track_display">Enable current track display</label>
+                            <small style="display: block; margin-left: 25px; color: var(--text-secondary);">(Shows current track on display and updates the current track file for the web UI)</small>
+                        </div>
+                        <div class="toggle-switch">
+                            <input type="checkbox" id="progressbar_display" name="progressbar_display" {% if config.settings.progressbar_display %}checked{% endif %}>
+                            <label for="progressbar_display">Show progress bar for Spotify tracks</label>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="section">
+                <h2>🖥️ ST7789 Display Configuration</h2>
+                <div class="config-grid">
+                    <div>
+                        <div class="form-group">
+                            <label for="spi_port">SPI Port:</label>
+                            <input type="number" id="spi_port" name="spi_port" value="{{ config.display.st7789.spi_port }}" min="0" max="1">
+                            <small>SPI port number (usually 0)</small>
+                        </div>
+                        <div class="form-group">
+                            <label for="spi_cs">SPI CS Pin:</label>
+                            <input type="number" id="spi_cs" name="spi_cs" value="{{ config.display.st7789.spi_cs }}">
+                            <small>SPI chip select pin</small>
+                        </div>
+                        <div class="form-group">
+                            <label for="dc_pin">DC Pin:</label>
+                            <input type="number" id="dc_pin" name="dc_pin" value="{{ config.display.st7789.dc_pin }}">
+                            <small>Data/command pin</small>
+                        </div>
+                    </div>
+                    <div>
+                        <div class="form-group">
+                            <label for="backlight_pin">Backlight Pin:</label>
+                            <input type="number" id="backlight_pin" name="backlight_pin" value="{{ config.display.st7789.backlight_pin }}">
+                            <small>Backlight control pin</small>
+                        </div>
+                        <div class="form-group">
+                            <label for="spi_speed">SPI Speed (Hz):</label>
+                            <input type="number" id="spi_speed" name="spi_speed" value="{{ config.display.st7789.spi_speed }}">
+                            <small>SPI communication speed</small>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="section">
+                <h2>🔤 Font Configuration</h2>
+                <div class="font-config">
+                    <div class="font-group">
+                        <h3>Main Display Fonts</h3>
+                        <div class="form-group">
+                            <label for="large_font_path">Large Font Path:</label>
+                            <input type="text" id="large_font_path" name="large_font_path" value="{{ config.fonts.large_font_path }}">
+                            <small>Path to large font file</small>
+                        </div>
+                        <div class="form-group">
+                            <label for="large_font_size">Large Font Size:</label>
+                            <input type="number" id="large_font_size" name="large_font_size" value="{{ config.fonts.large_font_size }}">
+                        </div>
+                        <div class="form-group">
+                            <label for="medium_font_path">Medium Font Path:</label>
+                            <input type="text" id="medium_font_path" name="medium_font_path" value="{{ config.fonts.medium_font_path }}">
+                            <small>Path to medium font file</small>
+                        </div>
+                        <div class="form-group">
+                            <label for="medium_font_size">Medium Font Size:</label>
+                            <input type="number" id="medium_font_size" name="medium_font_size" value="{{ config.fonts.medium_font_size }}">
+                        </div>
+                        <div class="form-group">
+                            <label for="small_font_path">Small Font Path:</label>
+                            <input type="text" id="small_font_path" name="small_font_path" value="{{ config.fonts.small_font_path }}">
+                            <small>Path to small font file</small>
+                        </div>
+                        <div class="form-group">
+                            <label for="small_font_size">Small Font Size:</label>
+                            <input type="number" id="small_font_size" name="small_font_size" value="{{ config.fonts.small_font_size }}">
+                        </div>
+                    </div>
+                    <div class="font-group">
+                        <h3>Spotify Display Fonts</h3>
+                        <div class="form-group">
+                            <label for="spot_large_font_path">Spotify Large Font Path:</label>
+                            <input type="text" id="spot_large_font_path" name="spot_large_font_path" value="{{ config.fonts.spot_large_font_path }}">
+                        </div>
+                        <div class="form-group">
+                            <label for="spot_large_font_size">Spotify Large Font Size:</label>
+                            <input type="number" id="spot_large_font_size" name="spot_large_font_size" value="{{ config.fonts.spot_large_font_size }}">
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="spot_medium_font_path">Spotify Medium Font Path:</label>
+                            <input type="text" id="spot_medium_font_path" name="spot_medium_font_path" value="{{ config.fonts.spot_medium_font_path }}">
+                        </div>
+                        <div class="form-group">
+                            <label for="spot_medium_font_size">Spotify Medium Font Size:</label>
+                            <input type="number" id="spot_medium_font_size" name="spot_medium_font_size" value="{{ config.fonts.spot_medium_font_size }}">
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="spot_small_font_path">Spotify Small Font Path:</label>
+                            <input type="text" id="spot_small_font_path" name="spot_small_font_path" value="{{ config.fonts.spot_small_font_path }}">
+                        </div>
+                        <div class="form-group">
+                            <label for="spot_small_font_size">Spotify Small Font Size:</label>
+                            <input type="number" id="spot_small_font_size" name="spot_small_font_size" value="{{ config.fonts.spot_small_font_size }}">
+                        </div>
+                    </div>
+                </div>
+            </div>
+<div class="section">
+    <h2>📶 WiFi Configuration</h2>
+    <div class="config-grid">
+        <div>
+            <div class="form-group">
+                <label for="ap_ssid">Access Point SSID:</label>
+                <input type="text" id="ap_ssid" name="ap_ssid" value="{{ config.get('wifi', {}).get('ap_ssid', 'Neonwifi-Manager') }}" placeholder="Neonwifi-Manager">
+                <small>SSID for the WiFi manager access point</small>
+            </div>
+        </div>
+        <div>
+            <div class="form-group">
+                <label for="ap_ip">Access Point IP:</label>
+                <input type="text" id="ap_ip" name="ap_ip" value="{{ config.get('wifi', {}).get('ap_ip', '192.168.42.1') }}" placeholder="192.168.42.1">
+                <small>IP address for the WiFi manager access point</small>
+            </div>
+        </div>
+    </div>
+</div>
+            <div class="section">
+                <h2>🎮 Button Configuration</h2>
+                <div class="button-grid">
+                    <div class="button-config">
+                        <h4>Button A</h4>
+                        <div class="form-group">
+                            <label for="button_a">GPIO Pin:</label>
+                            <input type="number" id="button_a" name="button_a" value="{{ config.buttons.button_a }}">
+                            <small>GPIO pin number for Button A</small>
+                        </div>
+                    </div>
+                    <div class="button-config">
+                        <h4>Button B</h4>
+                        <div class="form-group">
+                            <label for="button_b">GPIO Pin:</label>
+                            <input type="number" id="button_b" name="button_b" value="{{ config.buttons.button_b }}">
+                            <small>GPIO pin number for Button B</small>
+                        </div>
+                    </div>
+                    <div class="button-config">
+                        <h4>Button X</h4>
+                        <div class="form-group">
+                            <label for="button_x">GPIO Pin:</label>
+                            <input type="number" id="button_x" name="button_x" value="{{ config.buttons.button_x }}">
+                            <small>GPIO pin number for Button X</small>
+                        </div>
+                    </div>
+                    <div class="button-config">
+                        <h4>Button Y</h4>
+                        <div class="form-group">
+                            <label for="button_y">GPIO Pin:</label>
+                            <input type="number" id="button_y" name="button_y" value="{{ config.buttons.button_y }}">
+                            <small>GPIO pin number for Button Y</small>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div style="text-align: center; margin-top: 30px;">
+                <button type="submit" class="btn-success">💾 Save Advanced Configuration</button>
+                <button type="button" class="btn-secondary" onclick="location.href='/'">← Back to Main</button>
+                <button type="button" class="btn-danger" onclick="resetToDefaults()">🔄 Reset to Defaults</button>
+            </div>
+        </form>
+    </div>
+    <script>
+        function toggleTheme() {
+            const currentTheme = document.body.getAttribute('data-theme');
+            const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+            document.body.setAttribute('data-theme', newTheme);
+            const button = document.querySelector('.theme-toggle');
+            button.innerHTML = newTheme === 'dark' ? '☀️' : '🌙';
+            const form = document.createElement('form');
+            form.method = 'POST';
+            form.action = '/toggle_themeac';
+            const themeInput = document.createElement('input');
+            themeInput.type = 'hidden';
+            themeInput.name = 'theme';
+            themeInput.value = newTheme;
+            form.appendChild(themeInput);
+            document.body.appendChild(form);
+            form.submit();
+        }
+        function resetToDefaults() {
+            if (confirm('Are you sure you want to reset all advanced settings to defaults? This cannot be undone.')) {
+                fetch('/reset_advanced_config', { method: 'POST' })
+                    .then(() => {
+                        location.reload();
+                    });
+            }
+        }
+        function updateDisplayConfig() {
+            const displayType = document.getElementById('display_type').value;
+            const st7789Config = document.querySelectorAll('[id*="spi_"], [id*="dc_"], [id*="backlight_"]');
+            const st7789Section = document.querySelector('.section:nth-child(3)'); // ST7789 section
+            if (displayType === 'st7789') {
+                st7789Section.style.display = 'block';
+                st7789Config.forEach(element => {
+                    element.parentElement.style.display = 'block';
+                });
+            } else {
+                st7789Section.style.display = 'none';
+                st7789Config.forEach(element => {
+                    element.parentElement.style.display = 'none';
+                });
+            }
+        }
+        document.addEventListener('DOMContentLoaded', function() {
+            updateDisplayConfig();
+            document.getElementById('display_type').addEventListener('change', updateDisplayConfig);
+        });
+    </script>
+</body>
+</html>
+    """
+    return render_template_string(ADVANCED_CONFIG_HTML,
+            config=config, 
+            spotify_configured=spotify_configured,
+            spotify_authenticated=spotify_authenticated,ui_config=ui_config
+        )
+
+@app.route('/save_advanced_config', methods=['POST'])
+def save_advanced_config():
+    config = load_config()
+    try:
+        config["display"]["type"] = request.form.get('display_type', 'framebuffer')
+        config["display"]["framebuffer"] = request.form.get('framebuffer_device', '/dev/fb1')
+        config["display"]["rotation"] = int(request.form.get('rotation', 0))
+        if "st7789" not in config["display"]:
+            config["display"]["st7789"] = {}
+        config["display"]["st7789"]["spi_port"] = int(request.form.get('spi_port', 0))
+        config["display"]["st7789"]["spi_cs"] = int(request.form.get('spi_cs', 1))
+        config["display"]["st7789"]["dc_pin"] = int(request.form.get('dc_pin', 9))
+        config["display"]["st7789"]["backlight_pin"] = int(request.form.get('backlight_pin', 13))
+        config["display"]["st7789"]["spi_speed"] = int(request.form.get('spi_speed', 60000000))
+        config["fonts"]["large_font_path"] = request.form.get('large_font_path', '')
+        config["fonts"]["large_font_size"] = int(request.form.get('large_font_size', 36))
+        config["fonts"]["medium_font_path"] = request.form.get('medium_font_path', '')
+        config["fonts"]["medium_font_size"] = int(request.form.get('medium_font_size', 24))
+        config["fonts"]["small_font_path"] = request.form.get('small_font_path', '')
+        config["fonts"]["small_font_size"] = int(request.form.get('small_font_size', 16))
+        config["fonts"]["spot_large_font_path"] = request.form.get('spot_large_font_path', '')
+        config["fonts"]["spot_large_font_size"] = int(request.form.get('spot_large_font_size', 26))
+        config["fonts"]["spot_medium_font_path"] = request.form.get('spot_medium_font_path', '')
+        config["fonts"]["spot_medium_font_size"] = int(request.form.get('spot_medium_font_size', 18))
+        config["fonts"]["spot_small_font_path"] = request.form.get('spot_small_font_path', '')
+        config["fonts"]["spot_small_font_size"] = int(request.form.get('spot_small_font_size', 12))
+        if "buttons" not in config:
+            config["buttons"] = {}
+        config["buttons"]["button_a"] = int(request.form.get('button_a', 5))
+        config["buttons"]["button_b"] = int(request.form.get('button_b', 6))
+        config["buttons"]["button_x"] = int(request.form.get('button_x', 16))
+        config["buttons"]["button_y"] = int(request.form.get('button_y', 24))
+        config["wifi"]["ap_ssid"] = request.form.get('ap_ssid', 'Neonwifi-Manager')
+        config["wifi"]["ap_ip"] = request.form.get('ap_ip', '192.168.42.1')
+        config["settings"]["progressbar_display"] = 'progressbar_display' in request.form
+        config["settings"]["time_display"] = 'time_display' in request.form
+        config["settings"]["start_screen"] = request.form.get('start_screen', 'weather')
+        config["settings"]["use_gpsd"] = 'use_gpsd' in request.form
+        config["settings"]["use_google_geo"] = 'use_google_geo' in request.form
+        config["settings"]["enable_current_track_display"] = 'enable_current_track_display' in request.form
+        config["api_keys"]["redirect_uri"] = request.form.get('redirect_uri', 'http://127.0.0.1:5000')
+        save_config(config)
+        flash('success', 'Advanced configuration saved successfully!')
+    except Exception as e:
+        flash('error', f'Error saving configuration: {str(e)}')
+    return redirect(url_for('advanced_config'))
+
+@app.route('/reset_advanced_config', methods=['POST'])
+def reset_advanced_config():
+    config = load_config()
+    config["display"] = DEFAULT_CONFIG["display"].copy()
+    config["fonts"] = DEFAULT_CONFIG["fonts"].copy()
+    config["buttons"] = DEFAULT_CONFIG["buttons"].copy()
+    preserved_api_keys = config["api_keys"].copy()
+    preserved_settings = config["settings"].copy()
+    preserved_auto_start = config.get("auto_start", {}).copy()
+    preserved_ui = config.get("ui", {}).copy()
+    config["api_keys"] = preserved_api_keys
+    config["settings"].update({
+        "start_screen": "weather",
+        "progressbar_display": True,
+        "time_display": True,
+        "use_gpsd": True,
+        "use_google_geo": True
+    })
+    config["auto_start"] = preserved_auto_start
+    config["settings"] = preserved_settings
+    config["ui"] = preserved_ui
+    save_config(config)
+    flash('success', 'Advanced configuration reset to defaults!')
+    return redirect(url_for('advanced_config'))
 
 def get_last_logged_song():
     if not os.path.exists('songs.toml'):
@@ -1804,6 +2507,30 @@ def log_song_play(song_info):
     except Exception as e:
         logger = logging.getLogger('Launcher')
         logger.error(f"Error logging song play: {e}")
+
+def log_current_track_state():
+    global last_logged_song
+    try:
+        if not os.path.exists('.current_track_state.toml'):
+            return
+        state_data = toml.load('.current_track_state.toml')
+        track_data = state_data.get('current_track', {})
+        if not track_data.get('title') or track_data.get('title') == 'No track playing':
+            return
+        song_info = {
+            'song': track_data.get('title', ''),
+            'artist': track_data.get('artists', ''),
+            'artists': [track_data.get('artists', '')],
+            'full_track': f"{track_data.get('artists', '')} -- {track_data.get('title', '')}"
+        }
+        current_song = song_info.get('full_track', '').strip()
+        if last_logged_song and current_song == last_logged_song:
+            return
+        # Log the song
+        log_song_play(song_info)
+    except Exception as e:
+        logger = logging.getLogger('Launcher')
+        logger.error(f"Error logging from current track state: {e}")
 
 def get_current_track():
     try:
@@ -1941,6 +2668,7 @@ def signal_handler(sig, frame):
     sys.exit(0)
 
 def main():
+    load_config()
     logger = setup_logging()
     logger.info("🚀 Starting HUD35 Launcher")
     def get_lan_ips():
@@ -1977,6 +2705,7 @@ def main():
     try:
         sys.stdout = open(os.devnull, 'w')
         sys.stderr = open(os.devnull, 'w')
+        app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0
         app.run(host='0.0.0.0', port=5000, debug=False, use_reloader=False)
     except OSError as e:
         if "Address already in use" in str(e):
@@ -1988,6 +2717,7 @@ def main():
                 logger.info("📍 Web UI available at: http://127.0.0.1:5001")
             sys.stdout = open(os.devnull, 'w')
             sys.stderr = open(os.devnull, 'w')
+            app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0
             app.run(host='0.0.0.0', port=5001, debug=False, use_reloader=False)
         else:
             raise

@@ -73,6 +73,7 @@ DEFAULT_CONFIG = {
         "use_gpsd": True,
         "use_google_geo": True,
         "time_display": True,
+        "progressbar_display": True,
         "enable_current_track_display": True
     },
     "buttons": {
@@ -145,6 +146,7 @@ FALLBACK_CITY = config["settings"]["fallback_city"]
 USE_GPSD = config["settings"]["use_gpsd"]
 USE_GOOGLE_GEO = config["settings"]["use_google_geo"]
 TIME_DISPLAY = config["settings"]["time_display"]
+PROGRESSBAR_DISPLAY = config["settings"]["progressbar_display"]
 ENABLE_CURRENT_TRACK_DISPLAY = config["settings"]["enable_current_track_display"]
 FRAMEBUFFER = config["settings"]["framebuffer"]
 BUTTON_A = config["buttons"]["button_a"]
@@ -661,26 +663,63 @@ def draw_spotify_image(spotify_track):
         bbox = get_cached_text_bbox(error_text, MEDIUM_FONT)
         draw.rectangle([5, 5, min(bbox[2]+11, SCREEN_WIDTH-5), bbox[3]+9], fill=(0,0,0,200))
         draw.text((11, 9), error_text, fill="red", font=MEDIUM_FONT)
-    if spotify_track and 'current_position' in spotify_track and 'duration' in spotify_track:
-        current_pos = spotify_track['current_position']
-        duration = spotify_track['duration']
-        current_min = current_pos // 60
-        current_sec = current_pos % 60
-        duration_min = duration // 60
-        duration_sec = duration % 60
-        time_text = f"{current_min}:{current_sec:02d} / {duration_min}:{duration_sec:02d}"
-        time_bbox = SPOT_LARGE_FONT.getbbox(time_text)
-        time_width = time_bbox[2] - time_bbox[0]
-        time_height = time_bbox[3] - time_bbox[1]
-        padding = 5
-        background_width = time_width + 2 * padding
-        background_height = time_height + 2 * padding
-        time_x = 10
-        time_y = SCREEN_HEIGHT - background_height - 10
-        draw.rectangle([time_x, time_y, time_x + background_width, time_y + background_height], fill=(0, 0, 0, 200))
-        text_x = time_x + padding
-        text_y = time_y + padding - time_bbox[1]
-        draw.text((text_x, text_y), time_text, fill=secondary_color, font=SPOT_LARGE_FONT)
+    if PROGRESSBAR_DISPLAY:
+        progress_bar_height = 10
+        border_width = 2
+        progress_bar_y = SCREEN_HEIGHT - progress_bar_height
+        time_y_offset = progress_bar_height + border_width + 1
+        
+        draw.rectangle([
+            0, 
+            progress_bar_y - border_width, 
+            SCREEN_WIDTH, 
+            SCREEN_HEIGHT
+        ], fill=(*secondary_color, 150))
+        draw.rectangle([
+            border_width, 
+            progress_bar_y, 
+            SCREEN_WIDTH - border_width, 
+            SCREEN_HEIGHT
+        ], fill=(0, 0, 0, 200))
+        
+        if spotify_track and 'current_position' in spotify_track and 'duration' in spotify_track:
+            current_pos = spotify_track['current_position']
+            duration = spotify_track['duration']
+            if duration > 0:
+                progress_percent = min(current_pos / duration, 1.0)
+            else:
+                progress_percent = 0
+            
+            progress_width = int((SCREEN_WIDTH - 2 * border_width) * progress_percent)
+            draw.rectangle([
+                border_width, 
+                progress_bar_y, 
+                border_width + progress_width, 
+                SCREEN_HEIGHT
+            ], fill=(*main_color, 180))
+            current_min = current_pos // 60
+            current_sec = current_pos % 60
+            duration_min = duration // 60
+            duration_sec = duration % 60
+            time_text = f"{current_min}:{current_sec:02d} / {duration_min}:{duration_sec:02d}"
+            time_bbox = SPOT_LARGE_FONT.getbbox(time_text)
+            time_width = time_bbox[2] - time_bbox[0]
+            time_height = time_bbox[3] - time_bbox[1]
+            padding = 5
+            background_width = time_width + 2 * padding
+            background_height = time_height + 2 * padding
+            time_x = 5
+            time_y = SCREEN_HEIGHT - background_height - time_y_offset
+            draw.rectangle([time_x, time_y, time_x + background_width, time_y + background_height], fill=(0, 0, 0, 200))
+            text_x = time_x + padding
+            text_y = time_y + padding - time_bbox[1]
+            draw.text((text_x, text_y), time_text, fill=secondary_color, font=SPOT_LARGE_FONT)
+    else:
+        progress_bar_height = 0
+        time_y_offset = 0
+        if spotify_track and 'current_position' in spotify_track and 'duration' in spotify_track:
+            current_pos = spotify_track['current_position']
+            duration = spotify_track['duration']
     if TIME_DISPLAY:
         now = datetime.datetime.now().strftime("%H:%M")
         time_bbox = SPOT_LARGE_FONT.getbbox(now)
@@ -689,13 +728,56 @@ def draw_spotify_image(spotify_track):
         padding = 5
         background_width = time_width + 2 * padding
         background_height = time_height + 2 * padding
-        time_x = SCREEN_WIDTH - background_width - 10
-        time_y = SCREEN_HEIGHT - background_height - 10
+        time_x = SCREEN_WIDTH - background_width - 5
+        time_y = SCREEN_HEIGHT - background_height - time_y_offset
         draw.rectangle([time_x, time_y, time_x + background_width, time_y + background_height], fill=(0, 0, 0, 170))
         text_x = time_x + padding
         text_y = time_y + padding - time_bbox[1]
         draw.text((text_x, text_y), now, fill=main_color, font=SPOT_LARGE_FONT)
     img = Image.alpha_composite(img.convert("RGBA"), overlay).convert("RGB")
+    return img
+
+def draw_clock_image():
+    img = Image.new("RGB", (SCREEN_WIDTH, SCREEN_HEIGHT), "black")
+    bg_filename = get_background_path(None)
+    if bg_filename:
+        bg_path = os.path.join(BG_DIR, bg_filename)
+        bg_img = get_cached_bg(bg_path, (SCREEN_WIDTH, SCREEN_HEIGHT))
+        img.paste(bg_img, (0, 0))
+    draw = ImageDraw.Draw(img)
+    now = datetime.datetime.now()
+    time_str = now.strftime("%H:%M:%S")
+    date_str = now.strftime("%A, %B %d, %Y")
+    overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
+    overlay_draw = ImageDraw.Draw(overlay)
+    time_bbox = get_cached_text_bbox(time_str, LARGE_FONT)
+    time_width = time_bbox[2] - time_bbox[0]
+    time_height = time_bbox[3] - time_bbox[1]
+    time_x = (SCREEN_WIDTH - time_width) // 2
+    time_y = (SCREEN_HEIGHT - time_height) // 2 - 30
+    overlay_draw.rectangle([
+        time_x - 20, time_y - 10,
+        time_x + time_width + 20, time_y + time_height + 10
+    ], fill=(0, 0, 0, 180))
+    date_bbox = get_cached_text_bbox(date_str, MEDIUM_FONT)
+    date_width = date_bbox[2] - date_bbox[0]
+    date_height = date_bbox[3] - date_bbox[1]
+    date_x = (SCREEN_WIDTH - date_width) // 2
+    date_y = time_y + time_height + 20
+    overlay_draw.rectangle([
+        date_x - 15, date_y - 5,
+        date_x + date_width + 15, date_y + date_height + 5
+    ], fill=(0, 0, 0, 180))
+    img = Image.alpha_composite(img.convert("RGBA"), overlay).convert("RGB")
+    draw = ImageDraw.Draw(img)
+    draw_text_aliased(draw, img, (time_x, time_y), time_str, LARGE_FONT, "cyan")
+    draw_text_aliased(draw, img, (date_x, date_y), date_str, MEDIUM_FONT, "yellow")
+    seconds = now.second
+    seconds_text = f"{seconds:02d}"
+    seconds_bbox = get_cached_text_bbox(seconds_text, SMALL_FONT)
+    seconds_x = SCREEN_WIDTH - seconds_bbox[2] + seconds_bbox[0] - 10
+    seconds_y = SCREEN_HEIGHT - 30
+    draw_text_aliased(draw, img, (seconds_x, seconds_y), seconds_text, SMALL_FONT, "white")
     return img
 
 def create_fallback_art():
@@ -1257,10 +1339,13 @@ def handle_touch():
         while not exit_event.is_set():
             time.sleep(1)
         return
+    screen_order = ["weather", "spotify", "time"]
     for event in device.read_loop():
-        if exit_event.is_set(): break
+        if exit_event.is_set():
+            break
         if event.type == evdev.ecodes.EV_KEY and event.code == evdev.ecodes.BTN_TOUCH and event.value == 1:
-            START_SCREEN = "spotify" if START_SCREEN == "weather" else "weather"
+            current_index = screen_order.index(START_SCREEN)
+            START_SCREEN = screen_order[(current_index + 1) % len(screen_order)]
             update_display()
 
 def handle_buttons():
@@ -1297,10 +1382,7 @@ def handle_buttons():
                             START_SCREEN = "weather"
                             update_display()
                         elif button == BUTTON_X:
-                            global art_pos, artist_pos
-                            art_pos = [float(SCREEN_WIDTH - 155), float(SCREEN_HEIGHT - 155)]
-                            artist_pos = [5, float(SCREEN_HEIGHT - 105)]
-                            if START_SCREEN == "spotify":
+                            if START_SCREEN == "time":
                                 update_display()
                         elif button == BUTTON_Y:
                             global TIME_DISPLAY
@@ -1429,8 +1511,12 @@ def update_display():
     else:
         if START_SCREEN == "weather":
             img = draw_weather_image(weather_info)
-        else:
+        elif START_SCREEN == "spotify":
             img = draw_spotify_image(spotify_track)
+        elif START_SCREEN == "time":
+            img = draw_clock_image()
+        else:
+            img = draw_clock_image()
     display_image_on_framebuffer(img)
 
 def reset_waveshare_display():

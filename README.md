@@ -2,10 +2,7 @@
 
 A Raspberry Pi-based display system that shows weather information and currently playing Spotify tracks on a 3.5"tft or st7789 display hat mini screen. Features automatic background switching based on weather conditions, animated album art, touch screen controls, and a comprehensive web-based management interface.
 
-
-![HUD35 Display System in action](screenshots/display.gif)
-
-![More Screenshots](screenshots)
+![Screenshots](screenshots)
 
 
 ### 🎵 Enhanced Music Statistics & Analytics
