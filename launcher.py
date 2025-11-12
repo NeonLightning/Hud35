@@ -50,6 +50,11 @@ DEFAULT_CONFIG = {
         "time_display": True,
         "enable_current_track_display": True
     },
+    "clock": {
+        "type": "digital",
+        "background": "color", 
+        "color": "#000000"
+    },
     "wifi": {
         "ap_ssid": "Neonwifi-Manager",
         "ap_ip": "192.168.42.1",
@@ -69,32 +74,17 @@ neonwifi_process = None
 last_logged_song = None
 
 def load_config():
-    config_was_updated = False
     if not os.path.exists(CONFIG_PATH):
         with open(CONFIG_PATH, 'w') as f:
             toml.dump(DEFAULT_CONFIG, f)
         return DEFAULT_CONFIG.copy()
+    
     try:
         with open(CONFIG_PATH, 'r') as f:
-            config = toml.load(f)
-        for section, default_values in DEFAULT_CONFIG.items():
-            if section not in config:
-                config[section] = default_values.copy()
-                config_was_updated = True
-            else:
-                if isinstance(default_values, dict):
-                    for key, default_value in default_values.items():
-                        if key not in config[section]:
-                            config[section][key] = default_value
-                            config_was_updated = True
-        if config_was_updated:
-            with open(CONFIG_PATH, 'w') as f:
-                toml.dump(config, f)
-            logger = logging.getLogger('Launcher')
-            logger.info("📝 Updated config.toml with missing sections/keys")
-        return config
+            return toml.load(f)
     except Exception as e:
         print(f"Error loading config: {e}")
+        print("Using default configuration")
         return DEFAULT_CONFIG.copy()
 
 def save_config(config):
@@ -1007,7 +997,7 @@ MUSIC_STATS_HTML = """
             <div class="controls">
                 <form method="GET" style="display: flex; gap: 10px; align-items: center;">
                     <label>Time Period:</label>
-                    <select name="period" onchange="this.form.submit()">
+                    <select name="period">
                         <option value="1hour" {% if period == '1hour' %}selected{% endif %}>Last 1 Hour</option>
                         <option value="12hours" {% if period == '12hours' %}selected{% endif %}>Last 12 Hours</option>
                         <option value="24hours" {% if period == '24days' %}selected{% endif %}>Last 24 Hours</option>
@@ -1015,7 +1005,7 @@ MUSIC_STATS_HTML = """
                         <option value="all" {% if period == 'all' %}selected{% endif %}>All Time</option>
                     </select>
                     <label>Max Items:</label>
-                    <input type="number" name="lines" value="{{ lines }}" min="10" max="1000" style="width: 80px;" onchange="this.form.submit()">
+                    <input type="number" name="lines" value="{{ lines }}" min="10" max="1000" style="width: 80px;">
                 </form>
                 <button onclick="location.href='/'">← Back to Launcher</button>
                 <button onclick="clearSongLogs()">🗑️ Clear Song Logs</button>
@@ -1113,13 +1103,14 @@ MUSIC_STATS_HTML = """
     }
     function setupLiveStats() {
         let currentPeriod = new URLSearchParams(window.location.search).get('period') || '1hour';
+        let currentLines = document.querySelector('input[name="lines"]').value || 1000;
         let eventSource = null;
         let lastStatsHash = null;
         function connect() {
             if (eventSource) {
                 eventSource.close();
             }
-            eventSource = new EventSource(`/stream/music_stats?period=${currentPeriod}`);
+            eventSource = new EventSource(`/stream/music_stats?period=${currentPeriod}&lines=${currentLines}`);
             eventSource.onmessage = function(event) {
                 const stats = JSON.parse(event.data);
                 const currentHash = JSON.stringify({
@@ -1134,7 +1125,6 @@ MUSIC_STATS_HTML = """
                     if (lastStatsHash !== null) {
                         refreshCharts(false);
                     }
-                    
                     lastStatsHash = currentHash;
                 }
             };
@@ -1146,17 +1136,29 @@ MUSIC_STATS_HTML = """
         connect();
         document.querySelector('select[name="period"]').addEventListener('change', function() {
             currentPeriod = this.value;
-            lastStatsHash = null; // Reset hash when period changes
+            lastStatsHash = null;
             const url = new URL(window.location);
             url.searchParams.set('period', currentPeriod);
             window.history.pushState({}, '', url);
             connect();
             refreshCharts(true);
         });
+        document.querySelector('input[name="lines"]').addEventListener('change', function() {
+            currentLines = this.value;
+            lastStatsHash = null;
+            const url = new URL(window.location);
+            url.searchParams.set('lines', currentLines);
+            window.history.pushState({}, '', url);
+            connect();
+            refreshCharts(true);
+        });
+        document.querySelector('form').addEventListener('submit', function(e) {
+            e.preventDefault();
+        });
     }
     function refreshCharts(shouldAnimate = true) {
         const period = new URLSearchParams(window.location.search).get('period') || '1hour';
-        const lines = new URLSearchParams(window.location.search).get('lines') || 1000;
+        const lines = document.querySelector('input[name="lines"]').value || 1000;
         fetch(`/music_stats_data?period=${period}&lines=${lines}`)
             .then(response => response.json())
             .then(data => {
@@ -1169,54 +1171,64 @@ MUSIC_STATS_HTML = """
     function updateCharts(data, shouldAnimate = true) {
         const songChart = document.getElementById('songChart');
         songChart.innerHTML = '';
-        data.song_chart_items.forEach((item, index) => {
-            const [label, count, color] = item;
-            const [songName, artistName] = label.split(' - ');
-            const percentage = data.song_chart_items[0][1] > 0 ? (count / data.song_chart_items[0][1]) * 100 : 0;
-            const barItem = document.createElement('div');
-            barItem.className = 'bar-item';
-            barItem.innerHTML = `
-                <div class="song-name" title="${label}">${index + 1}. ${songName || label}</div>
-                <div class="artist-name" title="${artistName || 'Unknown Artist'}">
-                    ${artistName || 'Unknown Artist'}
-                </div>
-                <div class="bar-track-container">
-                    <div class="bar-track">
-                        <div class="bar-fill" style="width: ${shouldAnimate ? '0%' : percentage + '%'}; background: ${color};"></div>
+        if (data.song_chart_items && data.song_chart_items.length > 0) {
+            const maxSongCount = data.song_chart_items[0][1];
+            data.song_chart_items.forEach((item, index) => {
+                const [label, count, color] = item;
+                const [songName, artistName] = label.split(' - ');
+                const percentage = maxSongCount > 0 ? (count / maxSongCount) * 100 : 0;
+                const barItem = document.createElement('div');
+                barItem.className = 'bar-item';
+                barItem.innerHTML = `
+                    <div class="song-name" title="${label}">${index + 1}. ${songName || label}</div>
+                    <div class="artist-name" title="${artistName || 'Unknown Artist'}">
+                        ${artistName || 'Unknown Artist'}
                     </div>
-                    <div class="bar-count">${count}</div>
-                </div>
-            `;
-            songChart.appendChild(barItem);
-        });
+                    <div class="bar-track-container">
+                        <div class="bar-track">
+                            <div class="bar-fill" style="width: ${shouldAnimate ? '0%' : percentage + '%'}; background: ${color || '#007bff'};"></div>
+                        </div>
+                        <div class="bar-count">${count}</div>
+                    </div>
+                `;
+                songChart.appendChild(barItem);
+                // Animate if needed
+                if (shouldAnimate) {
+                    setTimeout(() => {
+                        const barFill = barItem.querySelector('.bar-fill');
+                        barFill.style.width = percentage + '%';
+                    }, index * 50);
+                }
+            });
+        } else {
+            songChart.innerHTML = '<div style="padding: 20px; text-align: center; color: var(--text-secondary);">No song data available</div>';
+        }
         const artistChart = document.getElementById('artistChart');
         artistChart.innerHTML = '';
-        data.artist_chart_items.forEach((item, index) => {
-            const [label, count, color] = item;
-            const percentage = data.artist_chart_items[0][1] > 0 ? (count / data.artist_chart_items[0][1]) * 100 : 0;
-            const barItem = document.createElement('div');
-            barItem.className = 'artist-bar-item';
-            barItem.innerHTML = `
-                <div class="artist-name-full" title="${label}">${index + 1}. ${label}</div>
-                <div class="artist-bar-track">
-                    <div class="artist-bar-fill" style="width: ${shouldAnimate ? '0%' : percentage + '%'}; background: ${color};"></div>
-                </div>
-                <div class="artist-bar-count">${count}</div>
-            `;
-            artistChart.appendChild(barItem);
-        });
-        if (shouldAnimate) {
-            setTimeout(() => {
-                const bars = document.querySelectorAll('.bar-fill, .artist-bar-fill');
-                bars.forEach(bar => {
-                    const computedStyle = window.getComputedStyle(bar);
-                    const targetWidth = computedStyle.width;
-                    bar.style.width = '0%';
+        if (data.artist_chart_items && data.artist_chart_items.length > 0) {
+            const maxArtistCount = data.artist_chart_items[0][1];
+            data.artist_chart_items.forEach((item, index) => {
+                const [label, count, color] = item;
+                const percentage = maxArtistCount > 0 ? (count / maxArtistCount) * 100 : 0;
+                const barItem = document.createElement('div');
+                barItem.className = 'artist-bar-item';
+                barItem.innerHTML = `
+                    <div class="artist-name-full" title="${label}">${index + 1}. ${label}</div>
+                    <div class="artist-bar-track">
+                        <div class="artist-bar-fill" style="width: ${shouldAnimate ? '0%' : percentage + '%'}; background: ${color || '#007bff'};"></div>
+                    </div>
+                    <div class="artist-bar-count">${count}</div>
+                `;
+                artistChart.appendChild(barItem);
+                if (shouldAnimate) {
                     setTimeout(() => {
-                        bar.style.width = targetWidth;
-                    }, 100);
-                });
-            }, 50);
+                        const barFill = barItem.querySelector('.artist-bar-fill');
+                        barFill.style.width = percentage + '%';
+                    }, index * 50);
+                }
+            });
+        } else {
+            artistChart.innerHTML = '<div style="padding: 20px; text-align: center; color: var(--text-secondary);">No artist data available</div>';
         }
     }
     function setupCurrentTrackSSE() {
@@ -1226,14 +1238,15 @@ MUSIC_STATS_HTML = """
             updateCurrentTrackDisplay(trackData);
         };
         eventSource.onerror = function(event) {
-            console.error('SSE error:', event);
+            console.error('Current track SSE error:', event);
             setTimeout(setupCurrentTrackSSE, 5000);
         };
         return eventSource;
     }
     function updateCurrentTrackDisplay(trackData) {
         const container = document.getElementById('currentTrackContainer');
-        if (trackData.has_track) {
+        if (!container) return;
+        if (trackData.has_track && trackData.song !== 'No track playing') {
             container.innerHTML = `
                 <div style="display: flex; align-items: center; gap: 20px; padding: 15px; background: var(--card-bg); border-radius: 8px; border-left: 4px solid var(--accent-color);">
                     <div style="flex: 1;">
@@ -1707,6 +1720,26 @@ def clear_logs():
     except Exception as e:
         return f'Error clearing logs: {str(e)}', 500
 
+@app.route('/music_stats_data')
+def music_stats_data():
+    period = request.args.get('period', '1hour')
+    try:
+        lines = int(request.args.get('lines', 1000))
+    except:
+        lines = 1000
+    songs_data = load_song_data(period)
+    song_stats, artist_stats = generate_music_stats(songs_data, lines)
+    song_chart_data = generate_chart_data(song_stats, 'Songs')
+    artist_chart_data = generate_chart_data(artist_stats, 'Artists')
+    song_chart_items = list(zip(song_chart_data['labels'], song_chart_data['data'], song_chart_data['colors']))
+    artist_chart_items = list(zip(artist_chart_data['labels'], artist_chart_data['data'], artist_chart_data['colors']))
+    return {
+        'song_chart_items': song_chart_items,
+        'artist_chart_items': artist_chart_items,
+        'total_plays': len(songs_data),
+        'unique_songs': len(song_stats),
+        'unique_artists': len(artist_stats)
+    }
 
 @app.route('/music_stats')
 def music_stats():
@@ -1718,7 +1751,7 @@ def music_stats():
     except:
         lines = 1000
     songs_data = load_song_data(period)
-    song_stats, artist_stats = generate_music_stats(songs_data)
+    song_stats, artist_stats = generate_music_stats(songs_data, lines)
     song_chart_data = generate_chart_data(song_stats, 'Songs')
     artist_chart_data = generate_chart_data(artist_stats, 'Artists')
     song_chart_items = list(zip(song_chart_data['labels'], song_chart_data['data'], song_chart_data['colors']))
@@ -1734,45 +1767,7 @@ def music_stats():
                                 unique_artists=len(artist_stats),
                                 enable_current_track_display=enable_current_track,
                                 ui_config=ui_config)
-
-@app.route('/music_stats_data')
-def music_stats_data():
-    period = request.args.get('period', '1hour')
-    try:
-        lines = int(request.args.get('lines', 1000))
-    except:
-        lines = 1000
-    songs_data = load_song_data(period)
-    song_stats, artist_stats = generate_music_stats(songs_data)
-    song_chart_data = generate_chart_data(song_stats, 'Songs')
-    artist_chart_data = generate_chart_data(artist_stats, 'Artists')
-    song_chart_items = list(zip(song_chart_data['labels'], song_chart_data['data'], song_chart_data['colors']))
-    artist_chart_items = list(zip(artist_chart_data['labels'], artist_chart_data['data'], artist_chart_data['colors']))
-    return {
-        'song_chart_items': song_chart_items,
-        'artist_chart_items': artist_chart_items,
-        'total_plays': len(songs_data),
-        'unique_songs': len(song_stats),
-        'unique_artists': len(artist_stats)
-    }
-
-@app.route('/stream/music_stats')
-def stream_music_stats():
-    period = request.args.get('period', '1hour')
-    def generate():
-        while True:
-            songs_data = load_song_data(period)
-            song_stats, artist_stats = generate_music_stats(songs_data)
-            stats_data = {
-                'total_plays': len(songs_data),
-                'unique_songs': len(song_stats),
-                'unique_artists': len(artist_stats),
-                'timestamp': datetime.now().isoformat()
-            }
-            yield f"data: {json.dumps(stats_data)}\n\n"
-            time.sleep(2)
-    return Response(generate(), mimetype='text/event-stream')
-
+    
 @app.route('/stream/current_track')
 def stream_current_track():
     def generate():
@@ -2672,7 +2667,7 @@ def load_song_data(period='1hour'):
         logger.error(f"Error loading song data: {e}")
     return songs_data
 
-def generate_music_stats(songs_data):
+def generate_music_stats(songs_data, max_items=1000):
     song_counter = Counter()
     artist_counter = Counter()
     for entry in songs_data:
@@ -2693,8 +2688,9 @@ def generate_music_stats(songs_data):
         for artist_name in clean_artists:
             if artist_name and artist_name != 'Unknown Artist':
                 artist_counter[artist_name] += 1
-    top_songs = dict(song_counter.most_common(20))
-    top_artists = dict(artist_counter.most_common(20))
+    # Use the max_items parameter instead of hardcoded 20
+    top_songs = dict(song_counter.most_common(max_items))
+    top_artists = dict(artist_counter.most_common(max_items))
     return top_songs, top_artists
 
 def generate_chart_data(stats, label_type):
