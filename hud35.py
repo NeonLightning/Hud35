@@ -835,27 +835,36 @@ def setup_spotify_oauth():
 
 def fetch_and_store_artist_image(sp, artist_id):
     global artist_image
-    try:
-        artist = sp.artist(artist_id)
-        images = artist.get('images', [])
-        url = None
-        for img in images:
-            if abs(img['width'] - 150) <= 20 and abs(img['height'] - 150) <= 20:
-                url = img['url']
-                break
-        if not url and images: url = images[-1]['url']
-        if not url:
-            with artist_image_lock: artist_image = None
-            return
-        headers = {'User-Agent': 'Mozilla/5.0'}
-        resp = requests.get(url, headers=headers, timeout=10)
-        resp.raise_for_status()
-        if 'image' not in resp.headers.get('content-type', '').lower(): raise ValueError("Not an image")
-        img = Image.open(BytesIO(resp.content)).convert("RGBA")
-        img = img.resize((100, 100), Image.BILINEAR)
-        with artist_image_lock: artist_image = img
-    except Exception:
-        with artist_image_lock: artist_image = None
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            artist = sp.artist(artist_id)
+            images = artist.get('images', [])
+            url = None
+            for img in images:
+                if abs(img['width'] - 150) <= 20 and abs(img['height'] - 150) <= 20:
+                    url = img['url']
+                    break
+            if not url and images: url = images[-1]['url']
+            if not url:
+                with artist_image_lock: artist_image = None
+                return
+            headers = {'User-Agent': 'Mozilla/5.0'}
+            resp = requests.get(url, headers=headers, timeout=10)
+            resp.raise_for_status()
+            if 'image' not in resp.headers.get('content-type', '').lower(): raise ValueError("Not an image")
+            img = Image.open(BytesIO(resp.content)).convert("RGBA")
+            img = img.resize((100, 100), Image.BILINEAR)
+            with artist_image_lock: artist_image = img
+            break
+        except Exception as e:
+            if attempt < max_retries - 1:
+                wait_time = (attempt + 1) * 2
+                print(f"🔄 Artist image fetch attempt {attempt + 1} failed: {e}, retrying in {wait_time}s")
+                time.sleep(wait_time)
+            else:
+                print(f"❌ Artist image fetch failed after {max_retries} attempts: {e}")
+                with artist_image_lock: artist_image = None
 
 def write_current_track_state(track_data):
     if not ENABLE_CURRENT_TRACK_DISPLAY:
@@ -1039,44 +1048,51 @@ def authenticate_spotify_interactive():
         return None
 
 def check_and_refresh_token(current_sp):
-    try:
-        sp_oauth = setup_spotify_oauth()
-        token_info = sp_oauth.get_cached_token()
-        if not token_info:
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            sp_oauth = setup_spotify_oauth()
+            token_info = sp_oauth.get_cached_token()
+            if not token_info:
+                return current_sp
+            headers = {
+                'Authorization': f"Bearer {token_info['access_token']}",
+            }
+            response = requests.get(
+                "https://api.spotify.com/v1/me",
+                headers=headers,
+                timeout=10
+            )
+            if response.status_code == 401:
+                print("🔄 Token expired, refreshing...")
+                refresh_token = token_info.get('refresh_token')
+                if refresh_token:
+                    new_token_info = sp_oauth.refresh_access_token(refresh_token)
+                    if new_token_info and 'access_token' in new_token_info:
+                        sp_oauth._save_token_info(new_token_info)
+                        print("✅ Token refreshed successfully")
+                        return spotipy.Spotify(auth=new_token_info['access_token'])
+            expires_at = token_info.get('expires_at', 0)
+            current_time = time.time()
+            time_until_expiry = expires_at - current_time
+            if time_until_expiry < 300:
+                print("🔄 Token expiring soon, refreshing...")
+                refresh_token = token_info.get('refresh_token')
+                if refresh_token:
+                    new_token_info = sp_oauth.refresh_access_token(refresh_token)
+                    if new_token_info and 'access_token' in new_token_info:
+                        sp_oauth._save_token_info(new_token_info)
+                        print("✅ Token refreshed successfully")
+                        return spotipy.Spotify(auth=new_token_info['access_token'])
             return current_sp
-        headers = {
-            'Authorization': f"Bearer {token_info['access_token']}",
-        }
-        response = requests.get(
-            "https://api.spotify.com/v1/me",
-            headers=headers,
-            timeout=10
-        )
-        if response.status_code == 401:
-            print("🔄 Token expired, refreshing...")
-            refresh_token = token_info.get('refresh_token')
-            if refresh_token:
-                new_token_info = sp_oauth.refresh_access_token(refresh_token)
-                if new_token_info and 'access_token' in new_token_info:
-                    sp_oauth._save_token_info(new_token_info)
-                    print("✅ Token refreshed successfully")
-                    return spotipy.Spotify(auth=new_token_info['access_token'])
-        expires_at = token_info.get('expires_at', 0)
-        current_time = time.time()
-        time_until_expiry = expires_at - current_time
-        if time_until_expiry < 300:
-            print("🔄 Token expiring soon, refreshing...")
-            refresh_token = token_info.get('refresh_token')
-            if refresh_token:
-                new_token_info = sp_oauth.refresh_access_token(refresh_token)
-                if new_token_info and 'access_token' in new_token_info:
-                    sp_oauth._save_token_info(new_token_info)
-                    print("✅ Token refreshed successfully")
-                    return spotipy.Spotify(auth=new_token_info['access_token'])
-        return current_sp
-    except Exception as e:
-        print(f"❌ Token check error: {e}")
-        return current_sp
+        except Exception as e:
+            if attempt < max_retries - 1:
+                wait_time = (attempt + 1) * 2
+                print(f"🔄 Token check attempt {attempt + 1} failed: {e}, retrying in {wait_time}s")
+                time.sleep(wait_time)
+            else:
+                print(f"❌ Token check failed after {max_retries} attempts: {e}")
+                return current_sp
 
 def spotify_loop():
     global START_SCREEN, spotify_track, sp, album_art_image, scrolling_text_cache
@@ -1179,24 +1195,39 @@ def spotify_loop():
                     last_successful_write = current_time
                 try:
                     if art_url:
-                        headers = {'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36'}
-                        resp = requests.get(art_url, headers=headers, timeout=10)
-                        resp.raise_for_status()
-                        img = Image.open(BytesIO(resp.content)).convert("RGB")
-                        img.thumbnail((150, 150), Image.LANCZOS)
-                        with art_lock: 
-                            album_art_image = img
-                        request_background_generation(img)
-                        album_bg_cache.clear()
-                        main_color, secondary_color = get_contrasting_colors(img)
-                        spotify_track['main_color'] = main_color
-                        spotify_track['secondary_color'] = secondary_color
+                        max_retries = 3
+                        for art_attempt in range(max_retries):
+                            try:
+                                headers = {'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36'}
+                                resp = requests.get(art_url, headers=headers, timeout=10)
+                                resp.raise_for_status()
+                                img = Image.open(BytesIO(resp.content)).convert("RGB")
+                                img.thumbnail((150, 150), Image.LANCZOS)
+                                with art_lock: 
+                                    album_art_image = img
+                                request_background_generation(img)
+                                album_bg_cache.clear()
+                                main_color, secondary_color = get_contrasting_colors(img)
+                                spotify_track['main_color'] = main_color
+                                spotify_track['secondary_color'] = secondary_color
+                                break
+                            except Exception as e:
+                                if art_attempt < max_retries - 1:
+                                    wait_time = (art_attempt + 1) * 2
+                                    print(f"🔄 Album art fetch attempt {art_attempt + 1} failed: {e}, retrying in {wait_time}s")
+                                    time.sleep(wait_time)
+                                else:
+                                    print(f"❌ Album art fetch failed after {max_retries} attempts: {e}")
+                                    with art_lock: 
+                                        album_art_image = None
+                                    spotify_track['main_color'] = (0, 255, 0)
+                                    spotify_track['secondary_color'] = (0, 255, 255)
+                        last_art_url = art_url
                     else:
                         with art_lock: 
                             album_art_image = None
                         spotify_track['main_color'] = (0, 255, 0)
                         spotify_track['secondary_color'] = (0, 255, 255)
-                    last_art_url = art_url
                 except Exception as e:
                     print(f"❌ Error loading album art: {e}")
                     with art_lock: 

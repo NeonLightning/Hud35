@@ -1,0 +1,601 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Advanced Configuration - HUD35 Launcher</title>
+    <style>
+        :root {
+            --bg-primary: #1a1a1a;
+            --bg-secondary: #2d2d2d;
+            --bg-tertiary: #3d3d3d;
+            --text-primary: #ffffff;
+            --text-secondary: #b0b0b0;
+            --accent-color: #007bff;
+            --accent-hover: #0056b3;
+            --border-color: #444444;
+            --success-bg: #155724;
+            --success-border: #c3e6cb;
+            --error-bg: #721c24;
+            --error-border: #f5c6cb;
+            --warning-bg: #856404;
+            --warning-border: #ffeaa7;
+            --info-bg: #004085;
+            --info-border: #b3d7ff;
+        }
+        [data-theme="light"] {
+            --bg-primary: #ffffff;
+            --bg-secondary: #f8f9fa;
+            --bg-tertiary: #e9ecef;
+            --text-primary: #212529;
+            --text-secondary: #6c757d;
+            --accent-color: #007bff;
+            --accent-hover: #0056b3;
+            --border-color: #dee2e6;
+            --success-bg: #d4edda;
+            --success-border: #c3e6cb;
+            --error-bg: #f8d7da;
+            --error-border: #f5c6cb;
+            --warning-bg: #fff3cd;
+            --warning-border: #ffeaa7;
+            --info-bg: #cce7ff;
+            --info-border: #b3d7ff;
+        }
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1000px;
+            margin: 0 auto;
+            padding: 20px;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            transition: all 0.3s ease;
+        }
+        .container {
+            background: var(--bg-secondary);
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            border: 1px solid var(--border-color);
+        }
+        h1 {
+            text-align: center;
+            color: var(--text-primary);
+            margin-bottom: 30px;
+        }
+        .section {
+            background: var(--bg-tertiary);
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 30px;
+            border-left: 4px solid var(--accent-color);
+        }
+        .section h2 {
+            margin-top: 0;
+            color: var(--text-primary);
+            border-bottom: 2px solid var(--border-color);
+            padding-bottom: 10px;
+        }
+        .form-group {
+            margin-bottom: 20px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+            color: var(--text-primary);
+        }
+        input[type="text"], input[type="number"], input[type="password"], textarea, select {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid var(--border-color);
+            border-radius: 5px;
+            box-sizing: border-box;
+            font-size: 16px;
+            background: var(--bg-secondary);
+            color: var(--text-primary);
+        }
+        input[type="text"]:focus, input[type="number"]:focus, input[type="password"]:focus, textarea:focus, select:focus {
+            border-color: var(--accent-color);
+            outline: none;
+        }
+        .instructions a {
+            color: var(--text-primary);
+            text-decoration: underline;
+        }
+        .toggle-switch {
+            display: flex;
+            align-items: center;
+            margin: 15px 0;
+        }
+        .toggle-switch input[type="checkbox"] {
+            margin-right: 10px;
+            transform: scale(1.2);
+        }
+        .toggle-switch label {
+            margin-bottom: 0;
+        }
+        small {
+            color: var(--text-secondary);
+            display: block;
+            margin-top: 5px;
+        }
+        .config-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+        button {
+            background: var(--accent-color);
+            color: white;
+            border: none;
+            padding: 12px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+            margin: 5px;
+            transition: all 0.3s ease;
+        }
+        button:hover {
+            background: var(--accent-hover);
+        }
+        .btn-secondary {
+            background: #6c757d;
+        }
+        .btn-success {
+            background: #28a745;
+        }
+        .btn-danger {
+            background: #dc3545;
+        }
+        .status {
+            padding: 10px;
+            border-radius: 5px;
+            margin: 10px 0;
+            text-align: center;
+        }
+        .status.success {
+            background: var(--success-bg);
+            color: var(--text-primary);
+            border: 1px solid var(--success-border);
+        }
+        .status.error {
+            background: var(--error-bg);
+            color: var(--text-primary);
+            border: 1px solid var(--error-border);
+        }
+        .theme-toggle {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background: var(--accent-color);
+            color: white;
+            border: none;
+            padding: 8px 12px;
+            border-radius: 20px;
+            cursor: pointer;
+            font-size: 12px;
+            z-index: 1000;
+        }
+        .button-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin: 20px 0;
+        }
+        .button-config {
+            background: var(--bg-secondary);
+            padding: 15px;
+            border-radius: 8px;
+            border: 1px solid var(--border-color);
+        }
+        .button-config h4 {
+            margin-top: 0;
+            color: var(--accent-color);
+        }
+        .font-config {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+        }
+        .font-group {
+            background: var(--bg-secondary);
+            padding: 15px;
+            border-radius: 8px;
+            border: 1px solid var(--border-color);
+        }
+        .instructions {
+            background: var(--info-bg);
+            padding: 15px;
+            border-radius: 5px;
+            margin-bottom: 15px;
+            font-size: 14px;
+            color: var(--text-primary);
+            border: 1px solid var(--info-border);
+        }
+    </style>
+</head>
+<body data-theme="{{ ui_config.theme }}">
+    <button class="theme-toggle" onclick="toggleTheme()">
+        {% if ui_config.theme == 'dark' %}
+        ☀️
+        {% else %}
+        🌙
+        {% endif %}
+    </button>
+    <div class="container">
+        <h1>⚙️ Advanced Configuration</h1>
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="status {{ category }}">{{ message }}</div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+        <form method="POST" action="/save_advanced_config">
+            <div class="section">
+                <h2>🔑 API Configuration</h2>
+                <div class="instructions">
+                    <p><strong>Get your API keys:</strong></p>
+                    <p>• <a href="https://openweathermap.org/api" target="_blank">OpenWeatherMap</a> - Free weather API</p>
+                    <p>• <a href="https://developers.google.com/maps/documentation/geolocation" target="_blank">Google Geolocation API</a> - Optional, for precise location</p>
+                    <p>• <a href="https://developer.spotify.com/dashboard" target="_blank">Spotify Developer Dashboard</a> - For music integration</p>
+                </div>
+                {% if spotify_configured %}
+                    {% if spotify_authenticated %}
+                    <div class="status success">
+                        <p>✅ Spotify is authenticated!</p>
+                    </div>
+                    {% else %}
+                    <div class="status warning">
+                        <p>⚠️ Spotify credentials saved but not authenticated.</p>
+                        <a href="/spotify_auth">
+                            <button type="button" class="btn-warning">🔑 Authenticate Spotify</button>
+                        </a>
+                    </div>
+                    {% endif %}
+                {% endif %}
+                <div class="config-grid">
+                    <div>
+                        <h3>Weather APIs</h3>
+                        <div class="form-group">
+                            <label for="openweather">OpenWeatherMap API Key:</label>
+                            <input type="text" id="openweather" name="openweather" value="{{ config.api_keys.openweather }}" placeholder="Enter your OpenWeatherMap API key">
+                        </div>
+                        <div class="form-group">
+                            <label for="google_geo">Google Geolocation API Key:</label>
+                            <input type="text" id="google_geo" name="google_geo" value="{{ config.api_keys.google_geo }}" placeholder="Enter Google Geolocation API key">
+                            <small>Optional - for precise location without GPS</small>
+                        </div>
+                    </div>
+                    <div>
+                        <h3>Spotify API</h3>
+                        <div class="form-group">
+                            <label for="client_id">Spotify Client ID:</label>
+                            <input type="text" id="client_id" name="client_id" value="{{ config.api_keys.client_id }}" placeholder="Enter your Spotify Client ID">
+                        </div>
+                        <div class="form-group">
+                            <label for="client_secret">Spotify Client Secret:</label>
+                            <input type="password" id="client_secret" name="client_secret" value="{{ config.api_keys.client_secret }}" placeholder="Enter your Spotify Client Secret">
+                        </div>
+                        <div class="form-group">
+                            <label for="redirect_uri">Spotify Redirect URI:</label>
+                            <input type="text" id="redirect_uri" name="redirect_uri" value="{{ config.api_keys.redirect_uri }}">
+                            <small>OAuth redirect URI for Spotify</small>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="section">
+                <h2>📍 Location & Display Settings</h2>
+                <div class="config-grid">
+                    <div>
+                        <h3>Location Services</h3>
+                        <div class="form-group">
+                            <label for="fallback_city">Fallback City:</label>
+                            <input type="text" id="fallback_city" name="fallback_city" value="{{ config.settings.fallback_city }}" placeholder="e.g., London,UK">
+                            <small>Used when location services are unavailable</small>
+                        </div>
+                        <div class="toggle-switch">
+                            <input type="checkbox" id="use_gpsd" name="use_gpsd" {% if config.settings.use_gpsd %}checked{% endif %}>
+                            <label for="use_gpsd">Use GPSD for location</label>
+                            <small style="display: block; margin-left: 25px; color: var(--text-secondary);">(Requires GPS hardware and gpsd service)</small>
+                        </div>
+                        <div class="toggle-switch">
+                            <input type="checkbox" id="use_google_geo" name="use_google_geo" {% if config.settings.use_google_geo %}checked{% endif %}>
+                            <label for="use_google_geo">Use Google Geolocation</label>
+                            <small style="display: block; margin-left: 25px; color: var(--text-secondary);">(More accurate than IP-based location)</small>
+                        </div>
+                    </div>
+                    <div>
+                        <h3>Display Settings</h3>
+                        <div class="form-group">
+                            <label for="display_type">Display Type:</label>
+                            <select id="display_type" name="display_type">
+                                <option value="framebuffer" {% if config.display.type == "framebuffer" %}selected{% endif %}>Framebuffer (TFT 3.5")</option>
+                                <option value="st7789" {% if config.display.type == "st7789" %}selected{% endif %}>ST7789 (DisplayHatMini)</option>
+                                <option value="waveshare_epd" {% if config.display.type == "waveshare_epd" %}selected{% endif %}>Waveshare E-Paper</option>
+                            </select>
+                            <small>Select your display hardware type</small>
+                        </div>
+                        <div class="form-group">
+                            <label for="framebuffer_device">Framebuffer Device:</label>
+                            <input type="text" id="framebuffer_device" name="framebuffer_device" value="{{ config.display.framebuffer }}" placeholder="/dev/fb1">
+                            <small>Path to framebuffer device (e.g., /dev/fb0, /dev/fb1)</small>
+                        </div>
+                        <div class="form-group">
+                            <label for="rotation">Rotation:</label>
+                            <select id="rotation" name="rotation">
+                                <option value="0" {% if config.display.rotation == 0 %}selected{% endif %}>0°</option>
+                                <option value="180" {% if config.display.rotation == 180 %}selected{% endif %}>180°</option>
+                            </select>
+                            <small>Screen rotation angle</small>
+                        </div>
+                        <div class="form-group">
+                            <label for="start_screen">Start Screen:</label>
+                            <select id="start_screen" name="start_screen">
+                                <option value="weather" {% if config.settings.start_screen == "weather" %}selected{% endif %}>Weather</option>
+                                <option value="spotify" {% if config.settings.start_screen == "spotify" %}selected{% endif %}>Spotify</option>
+                                <option value="time" {% if config.settings.start_screen == "time" %}selected{% endif %}>Time</option>
+                            </select>
+                            <small>Default screen to show on startup</small>
+                        </div>
+                        <div class="toggle-switch">
+                            <input type="checkbox" id="time_display" name="time_display" {% if config.settings.time_display %}checked{% endif %}>
+                            <label for="time_display">Show time display</label>
+                        </div>
+                        <div class="toggle-switch">
+                            <input type="checkbox" id="enable_current_track_display" name="enable_current_track_display" {% if config.settings.enable_current_track_display %}checked{% endif %}>
+                            <label for="enable_current_track_display">Enable current track display</label>
+                            <small style="display: block; margin-left: 25px; color: var(--text-secondary);">(Shows current track on display and updates the current track file for the web UI)</small>
+                        </div>
+                        <div class="toggle-switch">
+                            <input type="checkbox" id="progressbar_display" name="progressbar_display" {% if config.settings.progressbar_display %}checked{% endif %}>
+                            <label for="progressbar_display">Show progress bar for Spotify tracks</label>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="section">
+                <h2>🖥️ ST7789 Display Configuration</h2>
+                <div class="config-grid">
+                    <div>
+                        <div class="form-group">
+                            <label for="spi_port">SPI Port:</label>
+                            <input type="number" id="spi_port" name="spi_port" value="{{ config.display.st7789.spi_port }}" min="0" max="1">
+                            <small>SPI port number (usually 0)</small>
+                        </div>
+                        <div class="form-group">
+                            <label for="spi_cs">SPI CS Pin:</label>
+                            <input type="number" id="spi_cs" name="spi_cs" value="{{ config.display.st7789.spi_cs }}">
+                            <small>SPI chip select pin</small>
+                        </div>
+                        <div class="form-group">
+                            <label for="dc_pin">DC Pin:</label>
+                            <input type="number" id="dc_pin" name="dc_pin" value="{{ config.display.st7789.dc_pin }}">
+                            <small>Data/command pin</small>
+                        </div>
+                    </div>
+                    <div>
+                        <div class="form-group">
+                            <label for="backlight_pin">Backlight Pin:</label>
+                            <input type="number" id="backlight_pin" name="backlight_pin" value="{{ config.display.st7789.backlight_pin }}">
+                            <small>Backlight control pin</small>
+                        </div>
+                        <div class="form-group">
+                            <label for="spi_speed">SPI Speed (Hz):</label>
+                            <input type="number" id="spi_speed" name="spi_speed" value="{{ config.display.st7789.spi_speed }}">
+                            <small>SPI communication speed</small>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="section">
+                <h2>🕒 Clock Appearance</h2>
+                <div class="config-grid">
+                    <div>
+                        <h3>Clock Type</h3>
+                        <div class="form-group">
+                            <label for="clock_type">Clock Type:</label>
+                            <select id="clock_type" name="clock_type">
+                                <option value="digital" {% if config.clock.type == "digital" %}selected{% endif %}>Digital</option>
+                                <option value="analog" {% if config.clock.type == "analog" %}selected{% endif %}>Analog</option>
+                            </select>
+                            <small>CLock display type.</small>
+                        </div>
+                    </div>
+                    <div>
+                        <h3>Clock Background</h3>
+                        <div class="form-group">
+                            <label for="clock_background">Background Mode:</label>
+                            <select id="clock_background" name="clock_background">
+                                <option value="color" {% if config.clock.background == "color" %}selected{% endif %}>Color</option>
+                                <option value="album" {% if config.clock.background == "album" %}selected{% endif %}>Album Art</option>
+                                <option value="weather" {% if config.clock.background == "weather" %}selected{% endif %}>Weather</option>
+                            </select>
+                            <small>Select background source for the clock display</small>
+                        </div>
+                    </div>
+                    <div>
+                        <br>
+                        <div class="form-group">
+                            <label for="clock_color">Base Color (Hex or name):</label>
+                            <input type="text" id="clock_color" name="clock_color" value="{{ config.clock.color }}" placeholder="#00FFFF or cyan">
+                            <small>Used for color mode or fallback background</small>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="section">
+                <h2>🔤 Font Configuration</h2>
+                <div class="font-config">
+                    <div class="font-group">
+                        <h3>Main Display Fonts</h3>
+                        <div class="form-group">
+                            <label for="large_font_path">Large Font Path:</label>
+                            <input type="text" id="large_font_path" name="large_font_path" value="{{ config.fonts.large_font_path }}">
+                            <small>Path to large font file</small>
+                        </div>
+                        <div class="form-group">
+                            <label for="large_font_size">Large Font Size:</label>
+                            <input type="number" id="large_font_size" name="large_font_size" value="{{ config.fonts.large_font_size }}">
+                        </div>
+                        <div class="form-group">
+                            <label for="medium_font_path">Medium Font Path:</label>
+                            <input type="text" id="medium_font_path" name="medium_font_path" value="{{ config.fonts.medium_font_path }}">
+                            <small>Path to medium font file</small>
+                        </div>
+                        <div class="form-group">
+                            <label for="medium_font_size">Medium Font Size:</label>
+                            <input type="number" id="medium_font_size" name="medium_font_size" value="{{ config.fonts.medium_font_size }}">
+                        </div>
+                        <div class="form-group">
+                            <label for="small_font_path">Small Font Path:</label>
+                            <input type="text" id="small_font_path" name="small_font_path" value="{{ config.fonts.small_font_path }}">
+                            <small>Path to small font file</small>
+                        </div>
+                        <div class="form-group">
+                            <label for="small_font_size">Small Font Size:</label>
+                            <input type="number" id="small_font_size" name="small_font_size" value="{{ config.fonts.small_font_size }}">
+                        </div>
+                    </div>
+                    <div class="font-group">
+                        <h3>Spotify Display Fonts</h3>
+                        <div class="form-group">
+                            <label for="spot_large_font_path">Spotify Large Font Path:</label>
+                            <input type="text" id="spot_large_font_path" name="spot_large_font_path" value="{{ config.fonts.spot_large_font_path }}">
+                        </div>
+                        <div class="form-group">
+                            <label for="spot_large_font_size">Spotify Large Font Size:</label>
+                            <input type="number" id="spot_large_font_size" name="spot_large_font_size" value="{{ config.fonts.spot_large_font_size }}">
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="spot_medium_font_path">Spotify Medium Font Path:</label>
+                            <input type="text" id="spot_medium_font_path" name="spot_medium_font_path" value="{{ config.fonts.spot_medium_font_path }}">
+                        </div>
+                        <div class="form-group">
+                            <label for="spot_medium_font_size">Spotify Medium Font Size:</label>
+                            <input type="number" id="spot_medium_font_size" name="spot_medium_font_size" value="{{ config.fonts.spot_medium_font_size }}">
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="spot_small_font_path">Spotify Small Font Path:</label>
+                            <input type="text" id="spot_small_font_path" name="spot_small_font_path" value="{{ config.fonts.spot_small_font_path }}">
+                        </div>
+                        <div class="form-group">
+                            <label for="spot_small_font_size">Spotify Small Font Size:</label>
+                            <input type="number" id="spot_small_font_size" name="spot_small_font_size" value="{{ config.fonts.spot_small_font_size }}">
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="section">
+                <h2>📶 WiFi Configuration</h2>
+                <div class="config-grid">
+                    <div>
+                        <div class="form-group">
+                            <label for="ap_ssid">Access Point SSID:</label>
+                            <input type="text" id="ap_ssid" name="ap_ssid" value="{{ config.get('wifi', {}).get('ap_ssid', 'Neonwifi-Manager') }}" placeholder="Neonwifi-Manager">
+                            <small>SSID for the WiFi manager access point</small>
+                        </div>
+                    </div>
+                    <div>
+                        <div class="form-group">
+                            <label for="ap_ip">Access Point IP:</label>
+                            <input type="text" id="ap_ip" name="ap_ip" value="{{ config.get('wifi', {}).get('ap_ip', '192.168.42.1') }}" placeholder="192.168.42.1">
+                            <small>IP address for the WiFi manager access point</small>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="section">
+                <h2>🎮 Button Configuration</h2>
+                <div class="button-grid">
+                    <div class="button-config">
+                        <h4>Button A</h4>
+                        <div class="form-group">
+                            <label for="button_a">GPIO Pin:</label>
+                            <input type="number" id="button_a" name="button_a" value="{{ config.buttons.button_a }}">
+                            <small>GPIO pin number for Button A</small>
+                        </div>
+                    </div>
+                    <div class="button-config">
+                        <h4>Button B</h4>
+                        <div class="form-group">
+                            <label for="button_b">GPIO Pin:</label>
+                            <input type="number" id="button_b" name="button_b" value="{{ config.buttons.button_b }}">
+                            <small>GPIO pin number for Button B</small>
+                        </div>
+                    </div>
+                    <div class="button-config">
+                        <h4>Button X</h4>
+                        <div class="form-group">
+                            <label for="button_x">GPIO Pin:</label>
+                            <input type="number" id="button_x" name="button_x" value="{{ config.buttons.button_x }}">
+                            <small>GPIO pin number for Button X</small>
+                        </div>
+                    </div>
+                    <div class="button-config">
+                        <h4>Button Y</h4>
+                        <div class="form-group">
+                            <label for="button_y">GPIO Pin:</label>
+                            <input type="number" id="button_y" name="button_y" value="{{ config.buttons.button_y }}">
+                            <small>GPIO pin number for Button Y</small>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div style="text-align: center; margin-top: 30px;">
+                <button type="submit" class="btn-success">💾 Save Advanced Configuration</button>
+                <button type="button" class="btn-secondary" onclick="location.href='/'">← Back to Main</button>
+                <button type="button" class="btn-danger" onclick="resetToDefaults()">🔄 Reset to Defaults</button>
+            </div>
+        </form>
+    </div>
+    <script>
+        function toggleTheme() {
+            const currentTheme = document.body.getAttribute('data-theme');
+            const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+            document.body.setAttribute('data-theme', newTheme);
+            const button = document.querySelector('.theme-toggle');
+            button.innerHTML = newTheme === 'dark' ? '☀️' : '🌙';
+            const form = document.createElement('form');
+            form.method = 'POST';
+            form.action = '/toggle_themeac';
+            const themeInput = document.createElement('input');
+            themeInput.type = 'hidden';
+            themeInput.name = 'theme';
+            themeInput.value = newTheme;
+            form.appendChild(themeInput);
+            document.body.appendChild(form);
+            form.submit();
+        }
+        function resetToDefaults() {
+            if (confirm('Are you sure you want to reset all advanced settings to defaults? This cannot be undone.')) {
+                fetch('/reset_advanced_config', { method: 'POST' })
+                    .then(() => {
+                        location.reload();
+                    });
+            }
+        }
+        function updateDisplayConfig() {
+            const displayType = document.getElementById('display_type').value;
+            const st7789Config = document.querySelectorAll('[id*="spi_"], [id*="dc_"], [id*="backlight_"]');
+            const st7789Section = document.querySelector('.section:nth-child(3)'); // ST7789 section
+            if (displayType === 'st7789') {
+                st7789Section.style.display = 'block';
+                st7789Config.forEach(element => {
+                    element.parentElement.style.display = 'block';
+                });
+            } else {
+                st7789Section.style.display = 'none';
+                st7789Config.forEach(element => {
+                    element.parentElement.style.display = 'none';
+                });
+            }
+        }
+        document.addEventListener('DOMContentLoaded', function() {
+            updateDisplayConfig();
+            document.getElementById('display_type').addEventListener('change', updateDisplayConfig);
+        });
+    </script>
+</body>
+</html>
