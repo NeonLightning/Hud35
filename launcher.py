@@ -995,7 +995,6 @@ MUSIC_STATS_HTML = """
                 <form method="GET" style="display: flex; gap: 10px; align-items: center;">
                     <label>Max Items:</label>
                     <input type="number" name="lines" value="{{ lines }}" min="10" max="1000" style="width: 80px;">
-                    <button type="submit">Update</button>
                 </form>
                 <button onclick="location.href='/'">← Back to Launcher</button>
                 <button onclick="clearSongLogs()">🗑️ Clear Song Logs</button>
@@ -1559,6 +1558,7 @@ def view_logs():
                     <form id="linesForm" method="GET" style="display: flex; gap: 10px; align-items: center;">
                         <label for="lines">Lines to show:</label>
                         <input type="number" id="lines" name="lines" value="{lines}" min="10" max="10000" style="width: 80px;">
+                        <button type="submit">Update</button>
                     </form>
                     <button onclick="toggleLive()" id="liveBtn">▶️ Start Live</button>
                     <button onclick="location.href='/'">← Back to Launcher</button>
