@@ -214,6 +214,10 @@ hud35/
 ├── .spotify_cache        # Spotify authentication cache
 ├── hud35.log            # Application logs
 ├── song_counts.toml     # Music statistics data
+├── templates/     		 # Html templates for pages
+    ├── music_stats.html
+    ├── setup.html
+    └── ...
 └── bg/                  # Background images directory
     ├── bg_clear.png
     ├── bg_clouds.png
