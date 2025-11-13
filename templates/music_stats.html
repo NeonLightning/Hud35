@@ -278,15 +278,15 @@
         </div>
         <div class="stats-cards">
             <div class="stat-card">
-                <div class="stat-number">{{ total_plays }}</div>
+                <div class="stat-number" id="totalPlays">{{ total_plays }}</div>
                 <div class="stat-label">Total Plays</div>
             </div>
             <div class="stat-card">
-                <div class="stat-number">{{ unique_songs }}</div>
+                <div class="stat-number" id="uniqueSongs">{{ unique_songs }}</div>
                 <div class="stat-label">Unique Songs</div>
             </div>
             <div class="stat-card">
-                <div class="stat-number">{{ unique_artists }}</div>
+                <div class="stat-number" id="uniqueArtists">{{ unique_artists }}</div>
                 <div class="stat-label">Unique Artists</div>
             </div>
         </div>
@@ -340,7 +340,7 @@
             </div>
         </div>
     </div>
-<script>
+    <script>
     function toggleTheme() {
         const currentTheme = document.body.getAttribute('data-theme');
         const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
@@ -363,104 +363,79 @@
                 });
         }
     }
-    function setupLiveStats() {
-        let currentPeriod = new URLSearchParams(window.location.search).get('period') || '1hour';
-        let currentLines = document.querySelector('input[name="lines"]').value || 1000;
-        let eventSource = null;
-        let lastStatsHash = null;
-        function connect() {
-            if (eventSource) {
-                eventSource.close();
-            }
-        }
-        connect();
-        document.querySelector('input[name="lines"]').addEventListener('change', function() {
-            currentLines = this.value;
-            lastStatsHash = null;
-            const url = new URL(window.location);
-            url.searchParams.set('lines', currentLines);
-            window.history.pushState({}, '', url);
-            connect();
-            refreshCharts(true);
-        });
-        document.querySelector('form').addEventListener('submit', function(e) {
-            e.preventDefault();
-        });
-    }
-    function refreshCharts(shouldAnimate = true) {
-        const period = new URLSearchParams(window.location.search).get('period') || '1hour';
+    function refreshStats() {
         const lines = document.querySelector('input[name="lines"]').value || 1000;
-        fetch(`/music_stats_data?period=${period}&lines=${lines}`)
+        fetch(`/music_stats_data?lines=${lines}`)
             .then(response => response.json())
             .then(data => {
-                updateCharts(data, shouldAnimate);
+                updateCharts(data);
+                updateStatsCards(data);
             })
             .catch(error => {
-                console.error('Error refreshing charts:', error);
+                console.error('Error refreshing stats:', error);
             });
     }
-    function updateCharts(data, shouldAnimate = true) {
+    function updateCharts(data) {
+        updateSongChart(data.song_chart_items);
+        updateArtistChart(data.artist_chart_items);
+    }
+    function updateSongChart(songItems) {
         const songChart = document.getElementById('songChart');
         songChart.innerHTML = '';
-        if (data.song_chart_items && data.song_chart_items.length > 0) {
-            const maxSongCount = data.song_chart_items[0][1];
-            data.song_chart_items.forEach((item, index) => {
+        if (songItems && songItems.length > 0) {
+            const maxCount = songItems[0][1];
+            songItems.forEach((item, index) => {
                 const [label, count, color] = item;
-                const [songName, artistName] = label.split(' - ');
-                const percentage = maxSongCount > 0 ? (count / maxSongCount) * 100 : 0;
+                const [artist, song] = label.split(' -- ');
+                const percentage = maxCount > 0 ? (count / maxCount) * 100 : 0;
                 const barItem = document.createElement('div');
                 barItem.className = 'bar-item';
                 barItem.innerHTML = `
-                    <div class="song-name" title="${label}">${index + 1}. ${songName || label}</div>
-                    <div class="artist-name" title="${artistName || 'Unknown Artist'}">
-                        ${artistName || 'Unknown Artist'}
+                    <div class="song-name" title="${song || label}">${index + 1}. ${song || label}</div>
+                    <div class="artist-name" title="${artist || 'Unknown Artist'}">
+                        ${artist || 'Unknown Artist'}
                     </div>
                     <div class="bar-track-container">
                         <div class="bar-track">
-                            <div class="bar-fill" style="width: ${shouldAnimate ? '0%' : percentage + '%'}; background: ${color || '#007bff'};"></div>
+                            <div class="bar-fill" style="width: ${percentage}%; background: ${color || '#007bff'};"></div>
                         </div>
                         <div class="bar-count">${count}</div>
                     </div>
                 `;
                 songChart.appendChild(barItem);
-                // Animate if needed
-                if (shouldAnimate) {
-                    setTimeout(() => {
-                        const barFill = barItem.querySelector('.bar-fill');
-                        barFill.style.width = percentage + '%';
-                    }, index * 50);
-                }
             });
         } else {
             songChart.innerHTML = '<div style="padding: 20px; text-align: center; color: var(--text-secondary);">No song data available</div>';
         }
+    }
+    function updateArtistChart(artistItems) {
         const artistChart = document.getElementById('artistChart');
         artistChart.innerHTML = '';
-        if (data.artist_chart_items && data.artist_chart_items.length > 0) {
-            const maxArtistCount = data.artist_chart_items[0][1];
-            data.artist_chart_items.forEach((item, index) => {
+        if (artistItems && artistItems.length > 0) {
+            const maxCount = artistItems[0][1];
+            artistItems.forEach((item, index) => {
                 const [label, count, color] = item;
-                const percentage = maxArtistCount > 0 ? (count / maxArtistCount) * 100 : 0;
+                const percentage = maxCount > 0 ? (count / maxCount) * 100 : 0;
+                
                 const barItem = document.createElement('div');
                 barItem.className = 'artist-bar-item';
                 barItem.innerHTML = `
                     <div class="artist-name-full" title="${label}">${index + 1}. ${label}</div>
                     <div class="artist-bar-track">
-                        <div class="artist-bar-fill" style="width: ${shouldAnimate ? '0%' : percentage + '%'}; background: ${color || '#007bff'};"></div>
+                        <div class="artist-bar-fill" style="width: ${percentage}%; background: ${color || '#007bff'};"></div>
                     </div>
                     <div class="artist-bar-count">${count}</div>
                 `;
                 artistChart.appendChild(barItem);
-                if (shouldAnimate) {
-                    setTimeout(() => {
-                        const barFill = barItem.querySelector('.artist-bar-fill');
-                        barFill.style.width = percentage + '%';
-                    }, index * 50);
-                }
             });
         } else {
             artistChart.innerHTML = '<div style="padding: 20px; text-align: center; color: var(--text-secondary);">No artist data available</div>';
         }
+    }
+    function updateStatsCards(data) {
+        document.getElementById('totalPlays').textContent = data.total_plays;
+        document.getElementById('uniqueSongs').textContent = data.unique_songs;
+        document.getElementById('uniqueArtists').textContent = data.unique_artists;
     }
     function setupCurrentTrackSSE() {
         const eventSource = new EventSource('/stream/current_track');
@@ -523,8 +498,8 @@
         }
     }
     document.addEventListener('DOMContentLoaded', function() {
-        setupLiveStats();
         setupCurrentTrackSSE();
+        
         fetch('/api/current_track')
             .then(response => response.json())
             .then(data => {
@@ -533,7 +508,14 @@
             .catch(error => {
                 console.error('Error fetching initial track:', error);
             });
+        document.querySelector('input[name="lines"]').addEventListener('change', refreshStats);
+        document.querySelector('form').addEventListener('submit', function(e) {
+            e.preventDefault();
+            refreshStats();
+        });
+        setInterval(refreshStats, 5000);
+        refreshStats();
     });
-</script>
+    </script>
 </body>
 </html>

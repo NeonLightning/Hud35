@@ -6,8 +6,6 @@ from collections import Counter
 import os, toml, time, requests, subprocess, sys, signal, urllib.parse, socket, logging, threading, json
 
 app = Flask(__name__)
-app.jinja_env.cache_size = 1
-app.jinja_env.auto_reload = True
 @app.after_request
 def add_header(response):
     response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
@@ -226,15 +224,17 @@ def is_neonwifi_running():
         return False
 
 def parse_song_from_log(log_line):
-    if '🎵 Now playing:' in log_line:
+    if 'Now playing:' in log_line:
         try:
-            song_part = log_line.split('🎵 Now playing: ')[1].strip()
+            if '🎵 Now playing:' in log_line:
+                song_part = log_line.split('🎵 Now playing: ')[1].strip()
+            else:
+                song_part = log_line.split('Now playing: ')[1].strip()
+            
             if ' -- ' in song_part:
                 artist_part, song = song_part.split(' -- ', 1)
             elif ' - ' in song_part:
                 artist_part, song = song_part.split(' - ', 1)
-            elif ': ' in song_part:
-                artist_part, song = song_part.split(': ', 1)
             else:
                 artist_part = 'Unknown Artist'
                 song = song_part
@@ -243,7 +243,7 @@ def parse_song_from_log(log_line):
                 'song': song.strip(),
                 'artist': artist_part.strip(),
                 'artists': artists,
-                'full_track': song_part.strip()
+                'full_track': f"{artist_part} -- {song}".strip()
             }
         except Exception as e:
             logger = logging.getLogger('Launcher')
@@ -269,9 +269,10 @@ def start_hud35():
             for line in iter(hud35_process.stdout.readline, ''):
                 if line.strip():
                     logger.info(f"[HUD35] {line.strip()}")
+                    # PUT IT HERE - replace the existing song logging
                     song_info = parse_song_from_log(line)
                     if song_info:
-                        log_song_play(song_info)
+                        update_song_count(song_info)
         def monitor_current_track_state():
             while hud35_process and hud35_process.poll() is None:
                 log_current_track_state()
@@ -590,26 +591,6 @@ def music_stats_data():
         'unique_artists': unique_artists
     }
 
-@app.route('/stream/music_stats')
-def stream_music_stats():
-    try:
-        lines = int(request.args.get('lines', 1000))
-    except:
-        lines = 1000
-    def generate():
-        while True:
-            song_counts = load_song_counts()
-            song_stats, artist_stats = generate_music_stats(song_counts, lines)
-            stats_data = {
-                'total_plays': sum(song_counts.values()),
-                'unique_songs': len(song_counts),
-                'unique_artists': len(artist_stats),
-                'timestamp': datetime.now().isoformat()
-            }
-            yield f"data: {json.dumps(stats_data)}\n\n"
-            time.sleep(2)
-    return Response(generate(), mimetype='text/event-stream')
-
 @app.route('/music_stats')
 def music_stats():
     config = load_config()
@@ -637,7 +618,7 @@ def music_stats():
                         unique_artists=unique_artists,
                         enable_current_track_display=enable_current_track,
                         ui_config=ui_config)
-    
+
 @app.route('/stream/current_track')
 def stream_current_track():
     def generate():
@@ -790,38 +771,6 @@ def get_last_logged_song():
         logger.error(f"Error reading last logged song: {e}")
         return None
 
-def log_song_play(song_info):
-    global last_logged_song
-    logger = logging.getLogger('Launcher')
-    current_song = song_info.get('full_track', '').strip()
-    if last_logged_song and current_song == last_logged_song:
-        return
-    try:
-        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        song = song_info.get('song', '').replace('"', '\\"')
-        artists = song_info.get('artists', [])
-        if isinstance(artists, list):
-            separated_artists = []
-            for artist in artists:
-                if isinstance(artist, str) and ',' in artist:
-                    separated_artists.extend([a.strip() for a in artist.split(',') if a.strip()])
-                else:
-                    separated_artists.append(str(artist).strip())
-            artists_list = separated_artists
-        elif isinstance(artists, str):
-            artists_list = [a.strip() for a in artists.split(',') if a.strip()]
-        else:
-            artists_list = []
-        with open('songs.toml', 'a') as f:
-            f.write("[[play]]\n")
-            f.write(f"timestamp = \"{timestamp}\"\n")
-            f.write(f"song = \"{song}\"\n")
-            f.write(f"artists = {artists_list}\n")
-            f.write("\n")
-        last_logged_song = current_song
-    except Exception as e:
-        logger.error(f"Error logging song play: {e}")
-
 def log_current_track_state():
     global last_logged_song
     try:
@@ -829,26 +778,49 @@ def log_current_track_state():
             return
         state_data = toml.load('.current_track_state.toml')
         track_data = state_data.get('current_track', {})
-        if not track_data.get('title') or track_data.get('title') == 'No track playing':
+        if not track_data.get('title') or track_data.get('title') in ['No track playing', 'Unknown Track']:
             return
         artists_data = track_data.get('artists', '')
+        artists_list = []
         if isinstance(artists_data, list):
-            artists_list = artists_data
+            artists_list = [str(artist).strip() for artist in artists_data if artist and str(artist).strip()]
+        elif isinstance(artists_data, str) and artists_data.strip():
+            artists_list = [artist.strip() for artist in artists_data.split(',') if artist.strip()]
         else:
-            artists_list = [a.strip() for a in artists_data.split(',')] if artists_data else []
+            artists_list = ['Unknown Artist']
+        if not artists_list:
+            artists_list = ['Unknown Artist']
+        artist_str = ', '.join(artists_list)
+        current_song = f"{artist_str} -- {track_data.get('title', '')}".strip()
+        if last_logged_song and current_song == last_logged_song:
+            return
         song_info = {
             'song': track_data.get('title', ''),
             'artists': artists_list,
-            'full_track': f"{', '.join(artists_list)} -- {track_data.get('title', '')}" if artists_list else f"Unknown Artist -- {track_data.get('title', '')}"
+            'full_track': current_song
         }
-        current_song = song_info.get('full_track', '').strip()
-        if last_logged_song and current_song == last_logged_song:
-            return
-        log_song_play(song_info)
-        last_logged_song = current_song
+        update_song_count(song_info)
     except Exception as e:
         logger = logging.getLogger('Launcher')
         logger.error(f"Error logging from current track state: {e}")
+
+def update_song_count(song_info):
+    global last_logged_song
+    logger = logging.getLogger('Launcher')
+    current_song = song_info.get('full_track', '').strip()
+    if last_logged_song and current_song == last_logged_song:
+        return
+    try:
+        song_counts = load_song_counts()
+        if current_song in song_counts:
+            song_counts[current_song] += 1
+        else:
+            song_counts[current_song] = 1
+        save_song_counts(song_counts)
+        logger.info(f"🎵 Updated count: {song_info.get('song', 'Unknown Track')} - Total plays: {song_counts[current_song]}")
+        last_logged_song = current_song
+    except Exception as e:
+        logger.error(f"Error updating song count: {e}")
 
 def get_current_track():
     try:
@@ -912,23 +884,6 @@ def load_song_counts():
         logger.error(f"Error loading song counts: {e}")
         return {}
 
-def log_song_play(song_info):
-    global last_logged_song
-    logger = logging.getLogger('Launcher')
-    current_song = song_info.get('full_track', '').strip()
-    if last_logged_song and current_song == last_logged_song:
-        return
-    try:
-        song_counts = load_song_counts()
-        if current_song in song_counts:
-            song_counts[current_song] += 1
-        else:
-            song_counts[current_song] = 1
-        save_song_counts(song_counts)
-        last_logged_song = current_song
-    except Exception as e:
-        logger.error(f"Error logging song play: {e}")
-
 def save_song_counts(song_counts):
     try:
         data = {'song_counts': song_counts}
@@ -942,11 +897,15 @@ def generate_music_stats(song_counts, max_items=1000):
     song_counter = Counter(song_counts)
     artist_counter = Counter()
     for song_key, count in song_counts.items():
-        if ' - ' in song_key:
-            song_part, artist_part = song_key.split(' - ', 1)
-            artists = [a.strip() for a in artist_part.split(',')]
-            for artist in artists:
-                artist_counter[artist] += count
+        if ' -- ' in song_key:
+            try:
+                artist_part, song_part = song_key.split(' -- ', 1)
+                artists = [a.strip() for a in artist_part.split(',')]
+                for artist in artists:
+                    if artist and artist != 'Unknown Artist':
+                        artist_counter[artist] += count
+            except:
+                artist_counter['Unknown Artist'] += count
         else:
             artist_counter['Unknown Artist'] += count
     top_songs = dict(song_counter.most_common(max_items))
@@ -973,17 +932,36 @@ def cleanup():
     logger = logging.getLogger('Launcher')
     global hud35_process, neonwifi_process
     logger.info("🧹 Performing cleanup...")
-    if is_hud35_running():
-        stop_hud35()
-    if is_neonwifi_running():
-        stop_neonwifi()
+    if hud35_process and hud35_process.poll() is None:
+        logger.info("Stopping HUD35 process...")
+        hud35_process.terminate()
+        try:
+            hud35_process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            logger.warning("HUD35 didn't terminate gracefully, killing...")
+            hud35_process.kill()
+            hud35_process.wait()
+        hud35_process = None
+    if neonwifi_process and neonwifi_process.poll() is None:
+        logger.info("Stopping neonwifi process...")
+        neonwifi_process.terminate()
+        try:
+            neonwifi_process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            logger.warning("neonwifi didn't terminate gracefully, killing...")
+            neonwifi_process.kill()
+            neonwifi_process.wait()
+        neonwifi_process = None
+    subprocess.run(['pkill', '-f', 'hud35.py'], check=False, timeout=5)
+    subprocess.run(['pkill', '-f', 'neonwifi.py'], check=False, timeout=5)
+    logger.info("Cleanup completed")
 
 def signal_handler(sig, frame):
     logger = logging.getLogger('Launcher')
     logger.info("")
     logger.info("Shutting down launcher...")
     cleanup()
-    sys.exit(0)
+    os._exit(0)
 
 def main():
     load_config()

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import time, requests, json, evdev, spotipy, colorsys, datetime, os, subprocess, toml, random, sys, copy, math, queue, threading
+import time, requests, json, evdev, spotipy, colorsys, datetime, os, subprocess, toml, random, sys, copy, math, queue, threading, signal
 import  numpy as np
 from io import BytesIO
 from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageEnhance, ImageStat, ImageColor
@@ -206,12 +206,16 @@ def get_cached_text_bbox(text, font):
     return text_bbox_cache[key]
 
 def cleanup_caches():
-    global bg_cache, text_bbox_cache, album_bg_cache
-    if len(bg_cache) > 10: bg_cache.clear()
-    if len(text_bbox_cache) > 100: text_bbox_cache.clear()
-    if len(album_bg_cache) > 5:
+    global bg_cache, text_bbox_cache, album_bg_cache, scrolling_text_cache
+    if len(bg_cache) > 5:
+        bg_cache.clear()
+    if len(text_bbox_cache) > 50:
+        text_bbox_cache.clear()
+    if len(album_bg_cache) > 3:
         keys = list(album_bg_cache.keys())[-3:]
         album_bg_cache = {k: album_bg_cache[k] for k in keys}
+    if len(scrolling_text_cache) > 3:
+        scrolling_text_cache.clear()
 
 def get_location_via_gpsd(timeout=5, debug=True):
     try:
@@ -363,7 +367,7 @@ def make_background_from_art(size, album_art_img):
     return bg
 
 def get_cached_background(size, album_art_img):
-    global cached_background, current_art_hash, album_bg_cache
+    global album_bg_cache
     if album_art_img is None:
         return Image.new("RGB", size, "black")
     img_hash = id(album_art_img)
@@ -372,6 +376,9 @@ def get_cached_background(size, album_art_img):
         if bg.size == size:
             return bg.copy()
     bg = make_background_from_art(size, album_art_img)
+    if len(album_bg_cache) >= 3:
+        oldest_key = next(iter(album_bg_cache))
+        del album_bg_cache[oldest_key]
     album_bg_cache[img_hash] = bg.copy()
     return bg
 
@@ -389,8 +396,6 @@ def background_generation_worker():
                 clock_bg_result = get_cached_background(size, album_img)
                 with clock_bg_lock:
                     clock_bg_image = clock_bg_result.copy() if clock_bg_result else None
-            else:
-                print(f"Unknown background type requested: {bg_type}")
             bg_generation_queue.task_done()
         except queue.Empty:
             continue
@@ -404,15 +409,20 @@ def request_background_generation(album_img):
         with clock_bg_lock:
             if current_clock_artwork is None or id(album_img) != id(current_clock_artwork):
                 current_clock_artwork = album_img.copy()
+        current_hash = id(album_img)
+        if hasattr(request_background_generation, 'last_queued_hash'):
+            if request_background_generation.last_queued_hash == current_hash:
+                return
+        request_background_generation.last_queued_hash = current_hash
         try:
             bg_generation_queue.put((album_img, (SCREEN_WIDTH, SCREEN_HEIGHT), "spotify"), block=False)
         except queue.Full:
-            print("Spotify background generation queue is full, skipping request.")
+            pass
         if CLOCK_BACKGROUND == "album":
             try:
                 bg_generation_queue.put((album_img, (SCREEN_WIDTH, SCREEN_HEIGHT), "clock"), block=False)
             except queue.Full:
-                print("Clock background generation queue is full, skipping request.")
+                pass
     else:
         with clock_bg_lock:
             current_clock_artwork = None
@@ -1781,6 +1791,8 @@ def capture_frames_background():
     print("⏹️ Capture complete.")
 
 def main():
+    signal.signal(signal.SIGTERM, signal_handler)
+    signal.signal(signal.SIGINT, signal_handler)
     Thread(target=background_generation_worker, daemon=True).start()
     Thread(target=weather_loop, daemon=True).start()
     Thread(target=spotify_loop, daemon=True).start()
@@ -1801,6 +1813,10 @@ def main():
         time.sleep(0.5)
         cleanup_scroll_state()
         clear_framebuffer()
+
+def signal_handler(sig, frame):
+    print(f"Received signal {sig}, shutting down...")
+    exit_event.set()
 
 if __name__ == "__main__":
     main()
