@@ -230,7 +230,6 @@ def parse_song_from_log(log_line):
                 song_part = log_line.split('🎵 Now playing: ')[1].strip()
             else:
                 song_part = log_line.split('Now playing: ')[1].strip()
-            
             if ' -- ' in song_part:
                 artist_part, song = song_part.split(' -- ', 1)
             elif ' - ' in song_part:
@@ -780,6 +779,10 @@ def log_current_track_state():
         track_data = state_data.get('current_track', {})
         if not track_data.get('title') or track_data.get('title') in ['No track playing', 'Unknown Track']:
             return
+        current_position = track_data.get('current_position', 0)
+        duration = track_data.get('duration', 1)
+        if duration > 0 and (current_position / duration) < 0.1:
+            return        
         artists_data = track_data.get('artists', '')
         artists_list = []
         if isinstance(artists_data, list):
