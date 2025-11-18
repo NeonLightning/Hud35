@@ -47,7 +47,7 @@ python-packages: system-deps
 	@echo "$(GREEN)Installing Python packages in virtual environment...$(NC)"
 	$(VENV_DIR)/bin/pip install --upgrade pip
 	$(VENV_DIR)/bin/pip install spotipy st7789 eink-wave
-	$(VENV_DIR)/bin/pip install evdev numpy pillow flask
+	$(VENV_DIR)/bin/pip install evdev numpy pillow waitress
 	$(VENV_DIR)/bin/pip install pycairo dbus-python
 	$(VENV_DIR)/bin/pip install toml
 	

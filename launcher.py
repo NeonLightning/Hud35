@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 from flask import Flask, request, redirect, url_for, flash, Response, render_template
 from spotipy.oauth2 import SpotifyOAuth
-from datetime import datetime, timedelta
+from datetime import datetime
 from collections import Counter
-import os, toml, time, requests, subprocess, sys, signal, urllib.parse, socket, logging, threading, json, zlib, pickle, hashlib
+import os, toml, time, requests, subprocess, sys, signal, urllib.parse, socket, logging, threading, json, zlib, pickle, hashlib, waitress
 
 app = Flask(__name__)
 @app.after_request
@@ -1030,7 +1030,7 @@ def cleanup():
         logger.info("Stopping HUD35 process...")
         hud35_process.terminate()
         try:
-            hud35_process.wait(timeout=5)
+            hud35_process.wait(timeout=3)
         except subprocess.TimeoutExpired:
             logger.warning("HUD35 didn't terminate gracefully, killing...")
             hud35_process.kill()
@@ -1040,14 +1040,15 @@ def cleanup():
         logger.info("Stopping neonwifi process...")
         neonwifi_process.terminate()
         try:
-            neonwifi_process.wait(timeout=5)
+            neonwifi_process.wait(timeout=3)
         except subprocess.TimeoutExpired:
             logger.warning("neonwifi didn't terminate gracefully, killing...")
             neonwifi_process.kill()
             neonwifi_process.wait()
         neonwifi_process = None
-    subprocess.run(['pkill', '-f', 'hud35.py'], check=False, timeout=5)
-    subprocess.run(['pkill', '-f', 'neonwifi.py'], check=False, timeout=5)
+    subprocess.run(['pkill', '-f', 'hud35.py'], check=False, timeout=2)
+    subprocess.run(['pkill', '-f', 'neonwifi.py'], check=False, timeout=2)
+    time.sleep(1)
     logger.info("Cleanup completed")
 
 def signal_handler(sig, frame):
@@ -1055,14 +1056,13 @@ def signal_handler(sig, frame):
     logger.info("")
     logger.info("Shutting down launcher...")
     cleanup()
-    os._exit(0)
+    sys.exit(0)
 
 def main():
     ensure_log_file()
     load_config()
     logger = setup_logging()
     logger.info("🚀 Starting HUD35 Launcher")
-    
     def get_lan_ips():
         ips = []
         try:
@@ -1083,7 +1083,6 @@ def main():
         except Exception as e:
             logger.warning(f"Could not determine LAN IP: {e}")
         return list(set(ips))
-    
     lan_ips = get_lan_ips()
     auto_launch_applications()
     signal.signal(signal.SIGINT, signal_handler)
@@ -1095,8 +1094,10 @@ def main():
     chosen_port = None
     for port in ports:
         try:
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                s.bind(('0.0.0.0', port))
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            sock.bind(('0.0.0.0', port))
+            sock.close()
             chosen_port = port
             if lan_ips:
                 for ip in lan_ips:
@@ -1104,10 +1105,10 @@ def main():
             else:
                 logger.info(f"📍 Web UI available at: http://127.0.0.1:{chosen_port}")
             logger.info("⏹️  Press Ctrl+C to stop the launcher")
-            sys.stdout = open(os.devnull, 'w')
-            sys.stderr = open(os.devnull, 'w')
             app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0
-            app.run(host='0.0.0.0', port=chosen_port, debug=False, use_reloader=False)
+            from waitress import serve
+            logger.info(f"Starting Waitress server on port {chosen_port}...")
+            serve(app, host='0.0.0.0', port=chosen_port, _quiet=True)
             break
         except OSError as e:
             if "Address already in use" in str(e):
@@ -1115,6 +1116,11 @@ def main():
                 continue
             else:
                 raise
+        finally:
+            try:
+                sock.close()
+            except:
+                pass
     if chosen_port is None:
         logger.error("❌ Could not find an available port. All ports 5000-5003 are busy.")
         cleanup()
