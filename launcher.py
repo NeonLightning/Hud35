@@ -19,7 +19,15 @@ DEFAULT_CONFIG = {
     "display": {
         "type": "framebuffer",
         "framebuffer": "/dev/fb1",
-        "rotation": 0
+        "rotation": 0,
+        "st7789": {
+            "spi_port": 0,
+            "spi_cs": 1,
+            "dc_pin": 9,
+            "backlight_pin": 13,
+            "rotation": 0,
+            "spi_speed": 60000000
+        }
     },
     "fonts": {
         "large_font_path": "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
@@ -43,17 +51,14 @@ DEFAULT_CONFIG = {
         "redirect_uri": "http://127.0.0.1:5000"
     },
     "settings": {
+        "framebuffer": "/dev/fb1",
         "start_screen": "weather",
         "fallback_city": "",
         "use_gpsd": True,
         "use_google_geo": True,
         "time_display": True,
+        "progressbar_display": True,
         "enable_current_track_display": True
-    },
-    "clock": {
-        "type": "digital",
-        "background": "color", 
-        "color": "#000000"
     },
     "wifi": {
         "ap_ssid": "Neonwifi-Manager",
@@ -63,6 +68,17 @@ DEFAULT_CONFIG = {
         "auto_start_hud35": True,
         "auto_start_neonwifi": True,
         "check_internet": True
+    },
+    "clock": {
+        "type": "analog",
+        "background": "color",
+        "color": "black"
+    },
+    "buttons": {
+        "button_a": 5,
+        "button_b": 6,
+        "button_x": 16,
+        "button_y": 24
     },
     "ui": {
         "theme": "dark"
@@ -709,7 +725,6 @@ def clear_song_logs():
 @app.route('/advanced_config')
 def advanced_config():
     config = load_config()
-    config_ready = is_config_ready()
     spotify_configured = bool(config["api_keys"]["client_id"] and config["api_keys"]["client_secret"])
     spotify_authenticated, _ = check_spotify_auth()
     ui_config = config.get("ui", {"theme": "dark"})
@@ -724,6 +739,12 @@ def advanced_config():
 def save_advanced_config():
     config = load_config()
     try:
+        config["api_keys"]["openweather"] = request.form.get('openweather', '').strip()
+        config["api_keys"]["google_geo"] = request.form.get('google_geo', '').strip()
+        config["api_keys"]["client_id"] = request.form.get('client_id', '').strip()
+        config["api_keys"]["client_secret"] = request.form.get('client_secret', '').strip()
+        config["api_keys"]["redirect_uri"] = request.form.get('redirect_uri', 'http://127.0.0.1:5000').strip()
+        config["settings"]["fallback_city"] = request.form.get('fallback_city', '').strip()
         config["display"]["type"] = request.form.get('display_type', 'framebuffer')
         config["display"]["framebuffer"] = request.form.get('framebuffer_device', '/dev/fb1')
         config["display"]["rotation"] = int(request.form.get('rotation', 0))

@@ -8,3 +8,5 @@ hud35.log
 song_counts.toml
 swap.sh
 song_counts.bin
+backup.img
+shrinkbackup.img.gz

@@ -28,7 +28,7 @@ CLOCK_COLOR = "black"
 
 DEFAULT_CONFIG = {
     "display": {
-        "type": "st7789",
+        "type": "framebuffer",
         "framebuffer": "/dev/fb1",
         "rotation": 0,
         "st7789": {
@@ -71,6 +71,15 @@ DEFAULT_CONFIG = {
         "progressbar_display": True,
         "enable_current_track_display": True
     },
+    "wifi": {
+        "ap_ssid": "Neonwifi-Manager",
+        "ap_ip": "192.168.42.1",
+    },
+    "auto_start": {
+        "auto_start_hud35": True,
+        "auto_start_neonwifi": True,
+        "check_internet": True
+    },
     "clock": {
         "type": "analog",
         "background": "color",
@@ -81,6 +90,9 @@ DEFAULT_CONFIG = {
         "button_b": 6,
         "button_x": 16,
         "button_y": 24
+    },
+    "ui": {
+        "theme": "dark"
     }
 }
 
@@ -156,8 +168,12 @@ def load_config(path="config.toml"):
 
 config = load_config()
 if config["display"]["type"] == "waveshare_epd":
-    HAS_WAVESHARE_EPD = True
-if config["display"]["type"] == "waveshare_epd":
+    try:
+        import waveshare_epd
+        HAS_WAVESHARE_EPD = True
+    except ImportError:
+        HAS_WAVESHARE_EPD = False
+if config["display"]["type"] == "st7789":
     try:
         import st7789
         HAS_ST7789 = True
