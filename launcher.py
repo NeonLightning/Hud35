@@ -1010,12 +1010,20 @@ def save_song_counts(song_counts):
         logger.error(f"Error saving song counts: {e}")
 
 def generate_music_stats(song_counts, max_items=1000):
-    song_counter = Counter(song_counts)
+    def get_artist_for_sort(song_key):
+        if ' -- ' in song_key:
+            return song_key.split(' -- ', 1)[0].lower()
+        return song_key.lower()
+    sorted_songs = sorted(
+        song_counts.items(),
+        key=lambda x: (-x[1], get_artist_for_sort(x[0]))
+    )
+    top_songs = dict(sorted_songs[:max_items])
     artist_counter = Counter()
     for song_key, count in song_counts.items():
         if ' -- ' in song_key:
             try:
-                artist_part, song_part = song_key.split(' -- ', 1)
+                artist_part = song_key.split(' -- ', 1)[0]
                 artists = [a.strip() for a in artist_part.split(',')]
                 for artist in artists:
                     if artist and artist != 'Unknown Artist':
@@ -1024,8 +1032,8 @@ def generate_music_stats(song_counts, max_items=1000):
                 artist_counter['Unknown Artist'] += count
         else:
             artist_counter['Unknown Artist'] += count
-    top_songs = dict(song_counter.most_common(max_items))
-    top_artists = dict(artist_counter.most_common(max_items))
+    sorted_artists = sorted(artist_counter.items(), key=lambda x: (-x[1], x[0].lower()))
+    top_artists = dict(sorted_artists[:max_items])
     return top_songs, top_artists
 
 def generate_chart_data(stats, label_type):
