@@ -15,7 +15,6 @@ SCREEN_WIDTH = 480
 SCREEN_HEIGHT = 320
 UPDATE_INTERVAL_WEATHER = 3600
 GEO_UPDATE_INTERVAL = 3600
-SPOTIFY_UPDATE_INTERVAL = 1
 SCOPE = "user-read-currently-playing"
 USE_GPSD = True
 USE_GOOGLE_GEO = True
@@ -206,6 +205,9 @@ CLOCK_BACKGROUND = config["clock"]["background"]
 CLOCK_COLOR = config["clock"].get("color", "black")
 MIN_DISPLAY_INTERVAL = 0.001
 DEBOUNCE_TIME = 0.3
+UPDATE_INTERVAL_WEATHER = 3600
+GEO_UPDATE_INTERVAL = 900
+TOKEN_CHECK_INTERVAL = 150
 
 def get_cached_bg(bg_path, size):
     key = (bg_path, size)
@@ -305,17 +307,29 @@ def cache_weather(lat, lon, data):
 
 def get_weather_data_by_coords(api_key, lat, lon, units):
     if lat is None or lon is None: return None
-    cached = get_cached_weather(lat, lon)
-    if cached: return cached
+    cache_key = f"{lat:.2f}_{lon:.2f}"
+    current_time = time.time()
+    if cache_key in weather_cache:
+        cached_data, timestamp = weather_cache[cache_key]
+        if current_time - timestamp < 600:
+            return cached_data
     url = f"http://api.openweathermap.org/data/2.5/weather?lat={lat}&lon={lon}&appid={api_key}&units={units}"
     try:
         response = requests.get(url, timeout=10)
+        if response.status_code == 429:
+            print("⚠️ Weather API rate limit approached, extending cache")
+            if cache_key in weather_cache:
+                return weather_cache[cache_key][0]
+            return None
         response.raise_for_status()
         data = response.json()
         weather_info_local = {"city": data["name"], "country": data["sys"]["country"], "temp": round(data["main"]["temp"]), "feels_like": round(data["main"]["feels_like"]), "description": data["weather"][0]["description"].title(), "humidity": data["main"]["humidity"], "pressure": data["main"]["pressure"], "wind_speed": round(data["wind"]["speed"], 1), "icon_id": data["weather"][0]["icon"], "main": data["weather"][0]["main"].title()}
-        cache_weather(lat, lon, weather_info_local)
+        weather_cache[cache_key] = (weather_info_local, current_time)
         return weather_info_local
-    except requests.exceptions.RequestException:
+    except requests.exceptions.RequestException as e:
+        print(f"Weather API error: {e}")
+        if cache_key in weather_cache:
+            return weather_cache[cache_key][0]
         return None
     except KeyError:
         return None
@@ -1122,9 +1136,11 @@ def check_and_refresh_token(current_sp):
 def spotify_loop():
     global START_SCREEN, spotify_track, sp, album_art_image, scrolling_text_cache
     last_token_check = time.time()
-    token_check_interval = 60
+    token_check_interval = 150
     last_successful_write = 0
-    write_interval = 1
+    write_interval = 2
+    track_check_interval = 2
+    last_api_call = 0
     if os.path.exists(".spotify_cache"):
         try:
             with open(".spotify_cache", "r") as f:
@@ -1177,7 +1193,12 @@ def spotify_loop():
         if current_time - last_token_check > token_check_interval:
             sp = check_and_refresh_token(sp)
             last_token_check = current_time
+        time_since_last_api = current_time - last_api_call
+        if current_time - last_api_call < track_check_interval:
+            time.sleep(0.1)
+            continue
         try:
+            last_api_call = current_time
             track = sp.current_user_playing_track()
             if not track or not track.get('item'):
                 if spotify_track is not None:
@@ -1190,7 +1211,6 @@ def spotify_loop():
                     update_spotify_layout(None)
                     if START_SCREEN == "spotify":
                         update_display()
-                time.sleep(SPOTIFY_UPDATE_INTERVAL)
                 continue
             item = track['item']
             current_id = item.get('id')
@@ -1306,7 +1326,11 @@ def spotify_loop():
                     write_current_track_state(spotify_track)
                     last_successful_write = current_time
         except spotipy.exceptions.SpotifyException as e:
-            if e.http_status == 401:
+            if e.http_status == 429:
+                print("⚠️ Spotify API rate limit hit, backing off...")
+                time.sleep(30)
+                last_api_call = time.time() 
+            elif e.http_status == 401:
                 print("🔑 Spotify token expired, requiring re-authentication")
                 try:
                     os.remove(".spotify_cache")
@@ -1320,10 +1344,11 @@ def spotify_loop():
             else:
                 print(f"🎵 Spotify API error: {e}")
                 time.sleep(10)
+                last_api_call = time.time()
         except Exception as e:
             print(f"❌ Unexpected Spotify error: {e}")
             time.sleep(10)
-        time.sleep(SPOTIFY_UPDATE_INTERVAL)
+            last_api_call = time.time()
 
 def weather_loop():
     global START_SCREEN, weather_info
@@ -1337,6 +1362,7 @@ def weather_loop():
     last_weather = 0
     last_display_update = 0
     last_cache_cleanup = time.time()
+    GEO_UPDATE_INTERVAL = 900
     while not exit_event.is_set():
         now = time.time()
         if now - last_cache_cleanup > 300:
