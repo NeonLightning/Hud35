@@ -1040,7 +1040,6 @@ def initialize_spotify_client():
             try:
                 new_token_info = sp_oauth.refresh_access_token(refresh_token)
                 if new_token_info and 'access_token' in new_token_info:
-                    # FIX: Save the refreshed token back to cache
                     sp_oauth._save_token_info(new_token_info)
                     token_info = new_token_info
                     break
@@ -1059,7 +1058,7 @@ def initialize_spotify_client():
     access_token = token_info.get('access_token')
     if not access_token:
         return None
-    return spotipy.Spotify(auth=access_token)
+    return spotipy.Spotify(auth=access_token, requests_timeout=30)
 
 def authenticate_spotify_interactive():
     print("\n" + "="*60)
@@ -1108,7 +1107,7 @@ def check_and_refresh_token(current_sp):
             response = requests.get(
                 "https://api.spotify.com/v1/me",
                 headers=headers,
-                timeout=10
+                timeout=30
             )
             if response.status_code == 401:
                 print("🔄 Token expired, refreshing...")
@@ -1118,7 +1117,7 @@ def check_and_refresh_token(current_sp):
                     if new_token_info and 'access_token' in new_token_info:
                         sp_oauth._save_token_info(new_token_info)
                         print("✅ Token refreshed successfully")
-                        return spotipy.Spotify(auth=new_token_info['access_token'])
+                        return spotipy.Spotify(auth=new_token_info['access_token'], requests_timeout=30)
             expires_at = token_info.get('expires_at', 0)
             current_time = time.time()
             time_until_expiry = expires_at - current_time
@@ -1130,7 +1129,7 @@ def check_and_refresh_token(current_sp):
                     if new_token_info and 'access_token' in new_token_info:
                         sp_oauth._save_token_info(new_token_info)
                         print("✅ Token refreshed successfully")
-                        return spotipy.Spotify(auth=new_token_info['access_token'])
+                        return spotipy.Spotify(auth=new_token_info['access_token'], requests_timeout=30)
             return current_sp
         except Exception as e:
             if attempt < max_retries - 1:
@@ -1147,8 +1146,11 @@ def spotify_loop():
     token_check_interval = 150
     last_successful_write = 0
     write_interval = 2
-    track_check_interval = 2
+    base_track_check_interval = 2
+    idle_check_interval = 10
     last_api_call = 0
+    consecutive_no_track_count = 0
+    max_consecutive_no_track = 15
     if os.path.exists(".spotify_cache"):
         try:
             with open(".spotify_cache", "r") as f:
@@ -1167,7 +1169,7 @@ def spotify_loop():
                     )
                     token_info = sp_oauth.get_cached_token()
                     if token_info:
-                        sp = spotipy.Spotify(auth=token_info['access_token'])
+                        sp = spotipy.Spotify(auth=token_info['access_token'], requests_timeout=30)
                     else:
                         sp = authenticate_spotify_interactive()
         except Exception as e:
@@ -1179,6 +1181,7 @@ def spotify_loop():
             sp = authenticate_spotify_interactive()
     else:
         sp = authenticate_spotify_interactive()
+    
     if sp is None:
         spotify_track = {
             "title": "Spotify Authentication Required",
@@ -1194,21 +1197,35 @@ def spotify_loop():
         if START_SCREEN == "spotify":
             update_display()
         return
+    
     last_track_id = None
     last_art_url = None
+    api_error_count = 0
     while not exit_event.is_set():
         current_time = time.time()
         if current_time - last_token_check > token_check_interval:
             sp = check_and_refresh_token(sp)
             last_token_check = current_time
+        if api_error_count > 0:
+            current_check_interval = min(10 * (2 ** min(api_error_count-1, 2)), 60)
+        elif spotify_track and spotify_track.get('is_playing', False):
+            current_check_interval = base_track_check_interval
+            consecutive_no_track_count = 0
+        else:
+            if consecutive_no_track_count >= max_consecutive_no_track:
+                current_check_interval = idle_check_interval * 2
+            else:
+                current_check_interval = idle_check_interval
         time_since_last_api = current_time - last_api_call
-        if current_time - last_api_call < track_check_interval:
+        if time_since_last_api < current_check_interval:
             time.sleep(0.1)
             continue
         try:
             last_api_call = current_time
             track = sp.current_user_playing_track()
+            api_error_count = 0
             if not track or not track.get('item'):
+                consecutive_no_track_count += 1
                 if spotify_track is not None:
                     spotify_track = None
                     with art_lock: 
@@ -1220,6 +1237,7 @@ def spotify_loop():
                     if START_SCREEN == "spotify":
                         update_display()
                 continue
+            consecutive_no_track_count = 0
             item = track['item']
             current_id = item.get('id')
             artists_list = [artist['name'] for artist in item.get('artists', [])]
@@ -1249,11 +1267,11 @@ def spotify_loop():
                     last_successful_write = current_time
                 try:
                     if art_url:
-                        max_retries = 3
+                        max_retries = 2
                         for art_attempt in range(max_retries):
                             try:
                                 headers = {'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36'}
-                                resp = requests.get(art_url, headers=headers, timeout=10)
+                                resp = requests.get(art_url, headers=headers, timeout=15)
                                 resp.raise_for_status()
                                 img = Image.open(BytesIO(resp.content)).convert("RGB")
                                 img.thumbnail((150, 150), Image.LANCZOS)
@@ -1337,9 +1355,10 @@ def spotify_loop():
                     write_current_track_state(spotify_track)
                     last_successful_write = current_time
         except spotipy.exceptions.SpotifyException as e:
+            api_error_count += 1
             if e.http_status == 429:
-                print("⚠️ Spotify API rate limit hit, backing off...")
-                time.sleep(30)
+                print("⚠️ Spotify API rate limit hit, backing off for 60 seconds...")
+                time.sleep(60)
                 last_api_call = time.time() 
             elif e.http_status == 401:
                 print("🔑 Spotify token expired, requiring re-authentication")
@@ -1353,12 +1372,19 @@ def spotify_loop():
                     update_display()
                 return
             else:
-                print(f"🎵 Spotify API error: {e}")
-                time.sleep(10)
+                print(f"🎵 Spotify API error (attempt {api_error_count}): {e}")
                 last_api_call = time.time()
+        except requests.exceptions.Timeout:
+            api_error_count += 1
+            print(f"⏰ Spotify API timeout (attempt {api_error_count}), will retry with backoff")
+            last_api_call = time.time()
+        except requests.exceptions.ConnectionError as e:
+            api_error_count += 1
+            print(f"🔌 Spotify connection error (attempt {api_error_count}): {e}")
+            last_api_call = time.time()
         except Exception as e:
-            print(f"❌ Unexpected Spotify error: {e}")
-            time.sleep(10)
+            api_error_count += 1
+            print(f"❌ Unexpected Spotify error (attempt {api_error_count}): {e}")
             last_api_call = time.time()
 
 def weather_loop():
