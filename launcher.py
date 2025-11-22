@@ -252,12 +252,24 @@ def check_spotify_auth():
 
 def is_hud35_running():
     global hud35_process
+    current_time = time.time()
+    if hasattr(is_hud35_running, '_last_check') and current_time - is_hud35_running._last_check < 2:
+        return is_hud35_running._cached_result
     if hud35_process is not None:
         if hud35_process.poll() is None:
-            return True
+            result = True
         else:
             hud35_process = None
-    return False
+            result = False
+    else:
+        try:
+            result = bool(subprocess.run(['pgrep', '-f', 'hud35.py'], 
+                            capture_output=True, text=True).stdout.strip())
+        except Exception:
+            result = False
+    is_hud35_running._cached_result = result
+    is_hud35_running._last_check = current_time
+    return result
 
 def is_neonwifi_running():
     global neonwifi_process
@@ -700,6 +712,7 @@ def music_stats():
 def stream_current_track():
     def generate():
         last_data = None
+        update_counter = 0
         while True:
             current_track = get_current_track()
             track_data = {
@@ -712,9 +725,13 @@ def stream_current_track():
                 'has_track': current_track['has_track'],
                 'timestamp': datetime.now().isoformat()
             }
-            if track_data != last_data:
-                yield f"data: {json.dumps(track_data)}\n\n"
-                last_data = track_data
+            update_counter += 1
+            if track_data != last_data or update_counter >= 3:
+                if track_data != last_data:
+                    yield f"data: {json.dumps(track_data)}\n\n"
+                    last_data = track_data
+                update_counter = 0
+            time.sleep(0.5)
     return Response(generate(), mimetype='text/event-stream')
 
 @app.route('/api/current_track')
