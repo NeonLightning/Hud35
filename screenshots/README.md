@@ -4,20 +4,20 @@
 
 ![Active display on display hat mini](st7789.gif)
 
-![1](1.gif)
+![1](1.png)
 
-![2](2.gif)
+![2](2.png)
 
-![3](3.gif)
+![3](3.png)
 
-![4](4.gif)
+![4](4.png)
 
-![5](5.gif)
+![5](5.png)
 
-![6](6.gif)
+![6](6.png)
 
-![7](7.gif)
+![7](7.png)
 
-![8](8.gif)
+![8](8.png)
 
-![9](9.gif)
+![9](9.png)
