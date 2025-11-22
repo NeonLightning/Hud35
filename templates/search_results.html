@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Search Results - HUD35</title>
+    <style>
+        :root {
+            --bg-primary: #1a1a1a;
+            --bg-secondary: #2d2d2d;
+            --bg-tertiary: #3d3d3d;
+            --text-primary: #ffffff;
+            --text-secondary: #b0b0b0;
+            --accent-color: #007bff;
+            --accent-hover: #0056b3;
+            --border-color: #444444;
+        }
+        [data-theme="light"] {
+            --bg-primary: #ffffff;
+            --bg-secondary: #f8f9fa;
+            --bg-tertiary: #e9ecef;
+            --text-primary: #212529;
+            --text-secondary: #6c757d;
+            --accent-color: #007bff;
+            --accent-hover: #0056b3;
+            --border-color: #dee2e6;
+        }
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            transition: all 0.3s ease;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            padding: 15px;
+            background: var(--bg-secondary);
+            border-radius: 8px;
+            border: 1px solid var(--border-color);
+        }
+        .search-box {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+        .search-box input {
+            flex: 1;
+            padding: 12px;
+            border: 1px solid var(--border-color);
+            border-radius: 5px;
+            background: var(--bg-secondary);
+            color: var(--text-primary);
+            font-size: 16px;
+        }
+        .search-box button {
+            padding: 12px 20px;
+            background: var(--accent-color);
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        .search-box button:hover {
+            background: var(--accent-hover);
+        }
+        .search-box button:disabled {
+            background: var(--border-color);
+            cursor: not-allowed;
+        }
+        .results-container {
+            max-height: 70vh;
+            overflow-y: auto;
+            background: var(--bg-secondary);
+            border-radius: 8px;
+            border: 1px solid var(--border-color);
+        }
+        .result-item {
+            display: flex;
+            align-items: center;
+            padding: 15px;
+            border-bottom: 1px solid var(--border-color);
+            gap: 15px;
+            transition: background 0.2s ease;
+        }
+        .result-item:hover {
+            background: var(--bg-tertiary);
+        }
+        .result-item:last-child {
+            border-bottom: none;
+        }
+        .track-art {
+            width: 60px;
+            height: 60px;
+            border-radius: 4px;
+            object-fit: cover;
+        }
+        .track-art-placeholder {
+            width: 60px;
+            height: 60px;
+            background: var(--bg-tertiary);
+            border-radius: 4px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--text-secondary);
+            font-size: 20px;
+        }
+        .track-info {
+            flex: 1;
+        }
+        .track-name {
+            font-weight: bold;
+            color: var(--text-primary);
+            margin-bottom: 5px;
+            font-size: 16px;
+        }
+        .track-artists {
+            color: var(--text-secondary);
+            font-size: 14px;
+            margin-bottom: 3px;
+        }
+        .track-album {
+            color: var(--text-secondary);
+            font-size: 12px;
+        }
+        .play-button {
+            padding: 8px 16px;
+            background: var(--accent-color);
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        .play-button:hover {
+            background: var(--accent-hover);
+        }
+        .play-button:disabled {
+            background: var(--border-color);
+            cursor: not-allowed;
+        }
+        .status {
+            padding: 10px;
+            border-radius: 5px;
+            margin: 10px 0;
+            text-align: center;
+        }
+        .status.info {
+            background: #004085;
+            color: white;
+            border: 1px solid #b3d7ff;
+        }
+        .status.success {
+            background: #155724;
+            color: white;
+            border: 1px solid #c3e6cb;
+        }
+        .status.error {
+            background: #721c24;
+            color: white;
+            border: 1px solid #f5c6cb;
+        }
+        .back-button {
+            background: #6c757d;
+            color: white;
+            border: none;
+            padding: 10px 15px;
+            border-radius: 5px;
+            cursor: pointer;
+            text-decoration: none;
+            display: inline-block;
+        }
+        .back-button:hover {
+            background: #5a6268;
+        }
+    </style>
+</head>
+<body data-theme="{{ ui_config.theme }}">
+    <div class="container">
+        <div class="header">
+            <h1>🔍 Search Spotify</h1>
+            <a href="/" class="back-button">← Back to Launcher</a>
+        </div>
+        
+        <div class="search-box">
+            <input type="text" id="searchInput" placeholder="Search for songs, artists, albums..." value="{{ query }}">
+            <button onclick="performSearch()" id="searchBtn">🔍 Search</button>
+        </div>
+        
+        <div id="searchStatus" class="status" style="display: none;"></div>
+        
+        <div id="resultsContainer" class="results-container">
+            {% if tracks %}
+                {% for track in tracks %}
+                <div class="result-item">
+                    {% if track.image_url %}
+                    <img src="{{ track.image_url }}" class="track-art" alt="{{ track.album }}">
+                    {% else %}
+                    <div class="track-art-placeholder">🎵</div>
+                    {% endif %}
+                    <div class="track-info">
+                        <div class="track-name">{{ track.name }}</div>
+                        <div class="track-artists">{{ track.artists }}</div>
+                        <div class="track-album">{{ track.album }} • {{ track.duration }}</div>
+                    </div>
+                    <button class="play-button" onclick="playTrack('{{ track.uri }}')">▶ Play</button>
+                </div>
+                {% endfor %}
+            {% else %}
+                <div style="padding: 40px; text-align: center; color: var(--text-secondary);">
+                    <div style="font-size: 48px; margin-bottom: 10px;">🎵</div>
+                    <div>Enter a search term to find music</div>
+                </div>
+            {% endif %}
+        </div>
+    </div>
+
+    <script>
+        let lastRequestTime = 0;
+        let isRequestInProgress = false;
+        
+        function getRateLimitForAction(action) {
+            const limits = {
+                'play': 2000,
+                'search': 1000
+            };
+            return limits[action] || 1000;
+        }
+        
+        function canMakeRequest(action) {
+            if (isRequestInProgress) return false;
+            const now = Date.now();
+            const actionLimit = getRateLimitForAction(action);
+            if (now - lastRequestTime < actionLimit) return false;
+            isRequestInProgress = true;
+            lastRequestTime = now;
+            return true;
+        }
+        
+        function completeRequest() {
+            isRequestInProgress = false;
+        }
+        
+        function performSearch() {
+            const query = document.getElementById('searchInput').value.trim();
+            if (!query) {
+                showStatus('Please enter a search term', 'error');
+                return;
+            }
+            
+            if (!canMakeRequest('search')) {
+                showStatus('Please wait before searching again', 'error');
+                return;
+            }
+            
+            const searchBtn = document.getElementById('searchBtn');
+            searchBtn.disabled = true;
+            searchBtn.textContent = 'Searching...';
+            showStatus('Searching...', 'info');
+            
+            fetch('/spotify_search', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ query: query })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    // Redirect to results page with data
+                    window.location.href = `/search_results?query=${encodeURIComponent(query)}&tracks=${encodeURIComponent(JSON.stringify(data.tracks))}`;
+                } else {
+                    showStatus('Search failed: ' + data.error, 'error');
+                }
+            })
+            .catch(error => {
+                showStatus('Search error: ' + error, 'error');
+            })
+            .finally(() => {
+                completeRequest();
+                searchBtn.disabled = false;
+                searchBtn.textContent = '🔍 Search';
+            });
+        }
+        
+        function playTrack(trackUri) {
+            if (!canMakeRequest('play')) {
+                showStatus('Please wait before playing another track', 'error');
+                return;
+            }
+            
+            showStatus('Playing track...', 'info');
+            
+            fetch('/spotify_play_track', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ track_uri: trackUri })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    showStatus('Now playing!', 'success');
+                } else {
+                    showStatus('Play failed: ' + data.error, 'error');
+                }
+            })
+            .catch(error => {
+                showStatus('Play error: ' + error, 'error');
+            })
+            .finally(() => {
+                completeRequest();
+                setTimeout(() => {
+                    document.getElementById('searchStatus').style.display = 'none';
+                }, 3000);
+            });
+        }
+        
+        function showStatus(message, type) {
+            const statusDiv = document.getElementById('searchStatus');
+            statusDiv.textContent = message;
+            statusDiv.className = `status ${type}`;
+            statusDiv.style.display = 'block';
+        }
+        
+        // Enter key support
+        document.getElementById('searchInput').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                performSearch();
+            }
+        });
+        
+        // Focus search input on load
+        document.addEventListener('DOMContentLoaded', function() {
+            document.getElementById('searchInput').focus();
+        });
+    </script>
+</body>
+</html>

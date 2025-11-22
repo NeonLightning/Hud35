@@ -170,10 +170,11 @@ def load_config(path="config.toml"):
 config = load_config()
 if config["display"]["type"] == "waveshare_epd":
     try:
-        import waveshare_epd
+        from waveshare_epd.epd2in13_V3 import EPD
         HAS_WAVESHARE_EPD = True
     except ImportError:
         HAS_WAVESHARE_EPD = False
+        EPD = None
 if config["display"]["type"] == "st7789":
     try:
         import st7789
@@ -1609,24 +1610,18 @@ def handle_buttons():
     GPIO.cleanup()
 
 def init_waveshare_display():
-    global waveshare_epd, waveshare_base_image, partial_refresh_count, HAS_WAVESHARE_EPD, epd2in13_V3, epdconfig
+    global waveshare_epd, waveshare_base_image, partial_refresh_count
+    if not HAS_WAVESHARE_EPD:
+        return None
     try:
         print("Attempting to initialize Waveshare display...")
-        try:
-            from waveshare_epd import epd2in13_V3
-            import waveshare_epd.epdconfig as epdconfig
-            print("✅ Waveshare libraries imported successfully using standard method")
-        except ImportError:
-                return None
-        HAS_WAVESHARE_EPD = True
-        print("Creating EPD instance...")
-        waveshare_epd = epd2in13_V3.EPD()
+        waveshare_epd = EPD()
         print("Initializing display...")
         waveshare_epd.init()
         waveshare_epd.Clear(0xFF)
         waveshare_base_image = Image.new('1', (250, 122), 255)
         partial_refresh_count = 0
-        print("✅ Waveshare e-paper display initialized successfully with partial refresh support")
+        print("✅ Waveshare e-paper display initialized successfully")
         return waveshare_epd
     except Exception as e:
         print(f"❌ Waveshare display init failed: {e}")
@@ -1635,6 +1630,7 @@ def init_waveshare_display():
         return None
 
 def draw_waveshare_simple(weather_info, spotify_track):
+    global partial_refresh_count, waveshare_base_image
     display_width = 250
     display_height = 122
     img = Image.new('1', (display_width, display_height), 255)
@@ -1648,6 +1644,23 @@ def draw_waveshare_simple(weather_info, spotify_track):
         font_small = ImageFont.load_default()
         font_medium = ImageFont.load_default()
         font_large = ImageFont.load_default()
+    content_changed = False
+    current_track_id = None
+    if spotify_track:
+        current_track_id = f"{spotify_track.get('title', '')}_{spotify_track.get('artists', '')}"
+    current_weather_id = None
+    if weather_info:
+        current_weather_id = f"{weather_info.get('city', '')}_{weather_info.get('temp', '')}_{weather_info.get('description', '')}"
+    if not hasattr(draw_waveshare_simple, 'last_track_id'):
+        draw_waveshare_simple.last_track_id = None
+        draw_waveshare_simple.last_weather_id = None
+        content_changed = True
+    if current_track_id != draw_waveshare_simple.last_track_id:
+        content_changed = True
+        draw_waveshare_simple.last_track_id = current_track_id
+    if current_weather_id != draw_waveshare_simple.last_weather_id:
+        content_changed = True
+        draw_waveshare_simple.last_weather_id = current_weather_id
     album_art_size = 60
     album_art_x = display_width - album_art_size - 3
     album_art_y = display_height - album_art_size - 20
@@ -1718,6 +1731,7 @@ def draw_waveshare_simple(weather_info, spotify_track):
     clock_x = display_width - time_width - 5
     clock_y = display_height - time_height - 8
     draw.text((clock_x, clock_y), now, font=font_medium, fill=0)
+    img.content_changed = content_changed
     return img
 
 def convert_to_1bit_dithered(album_art_img, size=(40, 40)):
@@ -1729,7 +1743,7 @@ def convert_to_1bit_dithered(album_art_img, size=(40, 40)):
     return bw_img
 
 def display_image_on_waveshare(image):
-    global waveshare_epd, waveshare_base_image, partial_refresh_count, epd2in13_V3, epdconfig
+    global waveshare_epd, waveshare_base_image, partial_refresh_count
     with waveshare_lock:
         if waveshare_epd is None:
             if not init_waveshare_display():
@@ -1741,24 +1755,15 @@ def display_image_on_waveshare(image):
                 image = image.resize((display_width, display_height), Image.BILINEAR)
             if image.mode != '1':
                 image = image.convert('1')
-            use_partial = False
-            if waveshare_base_image is not None and partial_refresh_count < 60:
-                diff_pixels = 0
-                total_pixels = display_width * display_height
-                current_pixels = list(waveshare_base_image.getdata())
-                new_pixels = list(image.getdata())
-                for i in range(min(len(current_pixels), len(new_pixels))):
-                    if current_pixels[i] != new_pixels[i]:
-                        diff_pixels += 1
-                if diff_pixels < total_pixels * 0.3:
-                    use_partial = True
-            if use_partial:
+            content_changed = getattr(image, 'content_changed', True)
+            if content_changed or partial_refresh_count >= 300:
+            #if partial_refresh_count >= 300:
+                waveshare_epd.display(waveshare_epd.getbuffer(image))
+                waveshare_base_image = image.copy()
+                partial_refresh_count = 0
+            else:
                 waveshare_epd.displayPartial(waveshare_epd.getbuffer(image))
                 partial_refresh_count += 1
-            else:
-                waveshare_epd.display(waveshare_epd.getbuffer(image))
-                partial_refresh_count = 0
-            waveshare_base_image = image.copy()
         except Exception as e:
             print(f"Waveshare display error: {e}")
             try:
@@ -1801,16 +1806,28 @@ def update_display():
 
 def clear_framebuffer():
     display_type = config.get("display", {}).get("type", "framebuffer")
-    if display_type == "st7789" and HAS_ST7789 and st7789_display:
+    if display_type == "waveshare_epd" and HAS_WAVESHARE_EPD:
+        try:
+            white_img = Image.new('1', (250, 122), 255)
+            waveshare_epd.display(waveshare_epd.getbuffer(white_img))
+            return
+        except:
+            try:
+                init_waveshare_display()
+                white_img = Image.new('1', (250, 122), 255)
+                waveshare_epd.display(waveshare_epd.getbuffer(white_img))
+                print("✅ Screen cleared after reinit")
+            except:
+                print("❌ Couldn't clear screen - giving up")
+    elif display_type == "st7789" and HAS_ST7789 and st7789_display:
         black_img = Image.new("RGB", (320, 240), "black")
         st7789_display.display(black_img)
-    elif display_type == "waveshare_epd" and HAS_WAVESHARE_EPD and waveshare_epd:
-        white_img = Image.new('1', (250, 122), 255)
-        waveshare_epd.display(waveshare_epd.getbuffer(white_img))
-        waveshare_epd.sleep()
     else:
-        with open(FRAMEBUFFER, "wb") as f:
-            f.write(b'\x00\x00' * SCREEN_AREA)
+        try:
+            with open(FRAMEBUFFER, "wb") as f:
+                f.write(b'\x00\x00' * SCREEN_AREA)
+        except:
+            pass
 
 def cleanup_scroll_state():
     with scroll_lock:
@@ -1861,6 +1878,10 @@ def check_display_sleep():
         return True
     return display_sleeping
 
+def signal_handler(sig, frame):
+    print(f"Received signal {sig}, shutting down quickly...")
+    exit_event.set()
+
 def main():
     signal.signal(signal.SIGTERM, signal_handler)
     signal.signal(signal.SIGINT, signal_handler)
@@ -1882,13 +1903,12 @@ def main():
         print("\nShutting down...")
     finally:
         exit_event.set()
-        time.sleep(0.5)
         cleanup_scroll_state()
         clear_framebuffer()
+        time.sleep(0.3)
 
-def signal_handler(sig, frame):
-    print(f"Received signal {sig}, shutting down...")
-    exit_event.set()
+if __name__ == "__main__":
+    main()
 
 if __name__ == "__main__":
     main()

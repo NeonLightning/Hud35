@@ -24,24 +24,28 @@ all: system-deps python-packages config setup-service
 system-deps:
 	@echo "$(GREEN)Installing system dependencies...$(NC)"
 	sudo apt update
-	sudo apt install -y python3-pip python3-venv
+	sudo apt install -y python3-pip python3-venv curl
 	sudo apt install -y libjpeg-dev zlib1g-dev libpng-dev libfreetype6-dev git
 	sudo apt install -y liblcms2-dev libwebp-dev libtiff-dev libopenjp2-7-dev libxcb1-dev
 	sudo apt install -y libopenblas-dev libcairo2-dev libdbus-1-dev
+	@echo "$(GREEN)Installing uv system-wide...$(NC)"
+	curl -LsSf https://astral.sh/uv/install.sh | sh
+	sudo mv /root/.local/bin/uv /usr/local/bin/
+	sudo mv /root/.local/bin/uvx /usr/local/bin/
 	@echo "$(GREEN)System dependencies installed$(NC)"
 
-python-packages: system-deps
-	@echo "$(GREEN)Setting up Python virtual environment...$(NC)"
+python-packages:
+	@echo "$(GREEN)Setting up Python virtual environment with uv...$(NC)"
 	sudo mkdir -p $(PROJECT_DIR)
 	sudo chown $$USER:$$USER $(PROJECT_DIR)
-	python3 -m venv $(VENV_DIR)
-	@echo "$(GREEN)Installing Python packages in virtual environment...$(NC)"
-	$(VENV_DIR)/bin/pip install --upgrade pip
-	$(VENV_DIR)/bin/pip install spotipy st7789 eink-wave
-	$(VENV_DIR)/bin/pip install evdev numpy pillow flask
-	$(VENV_DIR)/bin/pip install pycairo dbus-python
-	$(VENV_DIR)/bin/pip install toml
-	$(VENV_DIR)/bin/pip install setuptools wheel
+	uv venv $(VENV_DIR)
+	@echo "$(GREEN)Installing Python packages with uv...$(NC)"
+	# Use uv pip to install packages in the virtual environment
+	uv pip install --python $(VENV_DIR)/bin/python spotipy st7789 eink-wave
+	uv pip install --python $(VENV_DIR)/bin/python evdev numpy pillow flask
+	uv pip install --python $(VENV_DIR)/bin/python pycairo dbus-python
+	uv pip install --python $(VENV_DIR)/bin/python toml
+	uv pip install --python $(VENV_DIR)/bin/python setuptools wheel
 	@echo "$(GREEN)All Python packages installed in virtual environment$(NC)"
 	@echo "$(GREEN)Copying project files...$(NC)"
 	cp -r . $(PROJECT_DIR)/
@@ -115,8 +119,6 @@ config:
 	@echo ""
 	@make config-api
 	@make config-display
-	@make config-fonts
-	@make config-buttons
 	@make config-wifi
 	@make config-settings
 	@echo ""
@@ -479,9 +481,9 @@ tail:
 	tail -f /opt/hud35/hud35.log
 
 update-packages:
-	@echo "$(GREEN)Updating Python packages in virtual environment...$(NC)"
+	@echo "$(GREEN)Updating Python packages with uv...$(NC)"
 	sudo systemctl stop $(SERVICE_NAME).service
-	$(VENV_DIR)/bin/pip install --upgrade spotipy st7789 eink-wave evdev numpy pillow flask
+	uv pip install --python $(VENV_DIR)/bin/python --upgrade spotipy st7789 eink-wave evdev numpy pillow flask pycairo dbus-python toml
 	sudo systemctl start $(SERVICE_NAME).service
 	@echo "$(GREEN)Packages updated and service restarted$(NC)"
 
@@ -493,7 +495,7 @@ venv-info:
 	@echo "$(GREEN)Virtual environment info:$(NC)"
 	@echo "Location: $(VENV_DIR)"
 	@echo "Python: $$($(VENV_DIR)/bin/python3 --version)"
-	@echo "Pip: $$($(VENV_DIR)/bin/pip --version)"
+	@echo "Package manager: uv"
 	@echo ""
 	@echo "$(GREEN)Installed packages:$(NC)"
 	$(VENV_DIR)/bin/pip list
@@ -509,12 +511,12 @@ clean:
 	@echo "$(GREEN)Cleanup complete$(NC)"
 
 help:
-	@echo "$(GREEN)HUD35 Setup Makefile$(NC)"
+	@echo "$(GREEN)HUD35 Setup Makefile (using uv)$(NC)"
 	@echo ""
 	@echo "$(YELLOW)Available targets:$(NC)"
 	@echo "  $(GREEN)all$(NC)             - Complete installation(not display)"
-	@echo "  $(GREEN)system-deps$(NC)     - Install system dependencies only"
-	@echo "  $(GREEN)python-packages$(NC) - Setup venv and install ALL Python packages via pip"
+	@echo "  $(GREEN)system-deps$(NC)     - Install system dependencies and uv"
+	@echo "  $(GREEN)python-packages$(NC) - Setup venv and install ALL Python packages via uv"
 	@echo "  $(GREEN)setup-service$(NC)   - Setup systemd service using virtual environment"
 	@echo "  $(GREEN)setup-display$(NC)   - $(RED)WARNING: Install LCD drivers and reboot$(NC)"
 	@echo "  $(GREEN)config$(NC)          - Walk-through configuration (all settings)"
@@ -533,7 +535,7 @@ help:
 	@echo "  $(GREEN)status$(NC)          - Check service status"
 	@echo "  $(GREEN)logs$(NC)            - Follow service logs (journalctl -f)"
 	@echo "  $(GREEN)tail$(NC)            - View program logs"
-	@echo "  $(GREEN)update-packages$(NC) - Update Python packages in venv"
+	@echo "  $(GREEN)update-packages$(NC) - Update Python packages with uv"
 	@echo "  $(GREEN)run$(NC)             - Run directly in virtual environment (testing)"
 	@echo "  $(GREEN)venv-info$(NC)       - Show virtual environment information"
 	@echo "  $(GREEN)clean$(NC)           - Remove service and project files"
@@ -546,3 +548,4 @@ help:
 	@echo "  4. make start"
 	@echo "  5. make status"
 	@echo "  6. make logs"
+	@echo "  7. make tail"
