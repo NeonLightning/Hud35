@@ -69,19 +69,8 @@ A Raspberry Pi-based display system that shows weather information, currently pl
 
 ## 🚀 Installation & Setup
 ```bash
-# Install system dependencies
-sudo apt update
-sudo apt install python3-pip python3-evdev python3-numpy python3-pil python3-flask
-
-# Install Python packages
-sudo pip3 install spotipy toml requests --break-system-packages
-
-# For ST7789 displays (DisplayHat Mini)
-sudo pip3 install st7789 --break-system-packages
-
-# For Waveshare E-Paper displays
-sudo pip3 install eink-wave --break-system-packages
-
+cd Hud35 folder
+sudo make
 ```
 
 ### Display Setup
