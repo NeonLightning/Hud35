@@ -111,20 +111,21 @@ config:
 	@echo "$(YELLOW)This will guide you through all configuration settings$(NC)"
 	@echo "$(YELLOW)Press Enter to keep current value, or enter a new value$(NC)"
 	@echo "$(BLUE)=========================================$(NC)"
-	@read -p "Start configuration walk-through? [y/N] " choice; \
-	if [ "$$choice" != "y" ] && [ "$$choice" != "Y" ]; then \
+	@read -p "Start configuration walk-through? [y/N] " CONFIRM; \
+	if [ "$$CONFIRM" != "y" ] && [ "$$CONFIRM" != "Y" ]; then \
 		echo "Configuration cancelled."; \
 		exit 0; \
+	else \
+		echo ""; \
+		$(MAKE) config-api; \
+		$(MAKE) config-display; \
+		$(MAKE) config-wifi; \
+		$(MAKE) config-settings; \
+		echo ""; \
+		echo "$(GREEN)✓ Configuration walk-through complete!$(NC)"; \
+		echo "$(GREEN)Current configuration:$(NC)"; \
+		$(MAKE) view-config; \
 	fi
-	@echo ""
-	@make config-api
-	@make config-display
-	@make config-wifi
-	@make config-settings
-	@echo ""
-	@echo "$(GREEN)✓ Configuration walk-through complete!$(NC)"
-	@echo "$(GREEN)Current configuration:$(NC)"
-	@make view-config
 
 config-api:
 	@echo "$(BLUE)--- API KEYS CONFIGURATION ---$(NC)"
