@@ -36,7 +36,7 @@ For 3.5" TFT, Display Hat Mini, and Waveshare 2.13" e-ink screens.
 ## 🛠️ Hardware Requirements
 
 - Raspberry Pi
-- Supported display (3.5" TFT, ST7789, or E-Paper)
+- Supported display (3.5" TFT, ST7789, or E-Paper)(optional)
 - Internet connection (WiFi or Ethernet)
 - Optional: GPS module for location services
 
@@ -180,6 +180,7 @@ Features:
 - **Framebuffer**: Standard TFT displays
 - **ST7789**: For DisplayHatMini with SPI configuration
 - **Waveshare E-Paper 2.13"**: E-ink displays
+- **Dummy Display**: No screen enabled
 
 ### Location Services
 - **GPSD**: Hardware GPS with gpsd service
