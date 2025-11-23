@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-from flask import Flask, request, redirect, url_for, flash, Response, render_template
+from flask import Flask, request, redirect, url_for, flash, Response, render_template, send_file
 from spotipy.oauth2 import SpotifyOAuth
 from datetime import datetime
 from collections import Counter
 from functools import wraps
-import os, toml, time, requests, subprocess, sys, signal, urllib.parse, socket, logging, threading, json, zlib, pickle, hashlib, spotipy
+import os, toml, time, requests, subprocess, sys, signal, urllib.parse, socket, logging, threading, json, zlib, pickle, hashlib, spotipy, io
 
 app = Flask(__name__)
 @app.after_request
@@ -741,6 +741,38 @@ def api_current_track():
         'track': current_track,
         'timestamp': datetime.now().isoformat()
     }
+
+@app.route('/current_album_art')
+def current_album_art():
+    try:
+        art_path = 'static/current_album_art.jpg'
+        if os.path.exists(art_path):
+            return send_file(art_path, mimetype='image/jpeg')
+        else:
+            from PIL import Image, ImageDraw
+            img = Image.new('RGB', (300, 300), color=(40, 40, 60))
+            draw = ImageDraw.Draw(img)
+            draw.rectangle([10, 10, 290, 290], outline=(100, 100, 150), width=3)
+            draw.text((150, 120), "🎵", fill=(200, 200, 220), anchor="mm")
+            draw.text((150, 180), "No Album Art", fill=(150, 150, 170), anchor="mm")
+            img_io = io.BytesIO()
+            img.save(img_io, 'JPEG', quality=85)
+            img_io.seek(0)
+            return send_file(img_io, mimetype='image/jpeg')
+    except Exception as e:
+        logger = logging.getLogger('Launcher')
+        logger.error(f"Error serving album art: {e}")
+        try:
+            error_img = Image.new('RGB', (300, 300), color=(60, 40, 40))
+            draw = ImageDraw.Draw(error_img)
+            draw.text((150, 150), "❌ Error", fill=(220, 150, 150), anchor="mm")
+            
+            img_io = io.BytesIO()
+            error_img.save(img_io, 'JPEG')
+            img_io.seek(0)
+            return send_file(img_io, mimetype='image/jpeg')
+        except:
+            return "Album art not available", 404
 
 @app.route('/spotify_play', methods=['POST'])
 @rate_limit(0.5)

@@ -260,6 +260,70 @@
             50% { opacity: 0.7; }
             100% { opacity: 1; }
         }
+        .album-art-container {
+            flex-shrink: 0;
+            position: relative;
+        }
+        .album-art {
+            width: 150px;
+            height: 150px;
+            border-radius: 8px;
+            border: 2px solid var(--border-color);
+            transition: opacity 0.5s ease;
+            object-fit: cover;
+        }
+        .album-art-placeholder {
+            width: 150px;
+            height: 150px;
+            border-radius: 8px;
+            border: 2px solid var(--border-color);
+            background: var(--bg-tertiary);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--text-secondary);
+            font-size: 48px;
+        }
+        .track-info {
+            flex: 1;
+            min-width: 0;
+        }
+        .track-title {
+            font-size: 18px;
+            font-weight: bold;
+            margin-bottom: 4px;
+            color: var(--text-primary);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .track-artist {
+            color: var(--text-secondary);
+            margin-bottom: 2px;
+            font-size: 14px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .track-album {
+            color: var(--text-secondary);
+            font-size: 12px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .track-status {
+            font-size: 12px;
+            font-weight: bold;
+            min-width: 80px;
+            text-align: right;
+        }
+        .playing {
+            color: var(--accent-color);
+        }
+        .paused {
+            color: var(--text-secondary);
+        }
     </style>
 </head>
 <body data-theme="{{ ui_config.theme }}">
@@ -314,7 +378,39 @@
         {% if config.settings.enable_current_track_display and spotify_authenticated  %}
         <h2>🎵 Currently Playing</h2>
         <div id="currentTrackContainer" class="section">
-                Loading current track...
+            <div style="display: flex; gap: 20px; align-items: flex-start;">
+                <div class="album-art-container">
+                    <img id="albumArtImg" src="/current_album_art" 
+                        class="album-art"
+                        style="display: none;"
+                        onload="handleAlbumArtLoad()"
+                        onerror="handleAlbumArtError()">
+                    <div id="albumArtPlaceholder" class="album-art-placeholder">
+                        🎵
+                    </div>
+                </div>
+                <div class="track-info">
+                    <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 10px;">
+                        <div style="flex: 1; min-width: 0;">
+                            <div id="trackTitle" class="track-title">Loading current track...</div>
+                            <div id="trackArtist" class="track-artist"></div>
+                            <div id="trackAlbum" class="track-album"></div>
+                        </div>
+                        <div id="trackStatus" class="track-status"></div>
+                    </div>
+                    <div style="margin-top: 15px;">
+                        <div style="display: flex; justify-content: space-between; font-size: 11px; color: var(--text-secondary); margin-bottom: 8px;">
+                            <span id="trackProgress">0:00</span>
+                            <span id="trackDuration">0:00</span>
+                        </div>
+                        <div style="width: 100%; height: 8px; background: var(--border-color); border-radius: 4px; overflow: hidden; position: relative;">
+                            <div id="progressBar" style="width: 0%; height: 100%; background: linear-gradient(90deg, var(--accent-color), #4dabf7); border-radius: 4px; transition: width 1s ease-in-out; position: relative;">
+                                <div style="position: absolute; right: 0; top: 50%; transform: translateY(-50%); width: 12px; height: 12px; background: white; border-radius: 50%; box-shadow: 0 0 4px rgba(0,0,0,0.3);"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
         </div>
         <div class="section">
             <h2>🎵 Spotify Controls</h2>
@@ -386,6 +482,10 @@
 <script>
     let lastRequestTime = 0;
     let isRequestInProgress = false;
+    let currentTrackForArt = '';
+    let albumArtRefreshTimer = null;
+    let lastAlbumArtUpdate = 0;
+    const MIN_ALBUM_ART_UPDATE_INTERVAL = 5000;
     function getRateLimitForAction(action) {
         const limits = {
             'play': 2500,
@@ -443,53 +543,107 @@
         };
         return eventSource;
     }
+    function handleAlbumArtLoad() {
+        const albumArtImg = document.getElementById('albumArtImg');
+        const albumArtPlaceholder = document.getElementById('albumArtPlaceholder');
+        if (albumArtImg && albumArtPlaceholder) {
+            albumArtImg.style.display = 'block';
+            albumArtPlaceholder.style.display = 'none';
+        }
+    }
+    function handleAlbumArtError() {
+        const albumArtImg = document.getElementById('albumArtImg');
+        const albumArtPlaceholder = document.getElementById('albumArtPlaceholder');
+        if (albumArtImg && albumArtPlaceholder) {
+            albumArtImg.style.display = 'none';
+            albumArtPlaceholder.style.display = 'flex';
+        }
+    }
     function updateCurrentTrackDisplay(trackData) {
-        const container = document.getElementById('currentTrackContainer');
-        if (!container) return;
+        const now = Date.now();
         if (trackData.has_track && trackData.song !== 'No track playing') {
+            updateTrackInfo(trackData);
+            const trackIdentifier = trackData.song + '|' + trackData.artist;
+            const shouldUpdateArt = trackIdentifier !== currentTrackForArt && 
+                                (now - lastAlbumArtUpdate) > MIN_ALBUM_ART_UPDATE_INTERVAL;
+            if (shouldUpdateArt) {
+                currentTrackForArt = trackIdentifier;
+                lastAlbumArtUpdate = now;
+                if (albumArtRefreshTimer) {
+                    clearTimeout(albumArtRefreshTimer);
+                }
+                albumArtRefreshTimer = setTimeout(() => {
+                    const albumArtImg = document.getElementById('albumArtImg');
+                    if (albumArtImg) {
+                        albumArtImg.src = '/current_album_art?ts=' + now + '&rand=' + Math.random();
+                    }
+                }, 1000);
+            }
+        } else {
+            currentTrackForArt = '';
+            updateNoTrackDisplay();
+        }
+    }
+    function updateTrackInfo(trackData) {
+        const trackTitle = document.getElementById('trackTitle');
+        const trackArtist = document.getElementById('trackArtist');
+        const trackAlbum = document.getElementById('trackAlbum');
+        const trackStatus = document.getElementById('trackStatus');
+        const trackProgress = document.getElementById('trackProgress');
+        const trackDuration = document.getElementById('trackDuration');
+        const progressBar = document.getElementById('progressBar');
+        if (trackTitle) trackTitle.textContent = trackData.song;
+        if (trackArtist) trackArtist.textContent = 'by ' + trackData.artist;
+        if (trackAlbum) trackAlbum.textContent = 'on ' + trackData.album;
+        if (trackStatus) {
+            trackStatus.textContent = trackData.is_playing ? '▶ PLAYING' : '⏸ PAUSED';
+            trackStatus.className = trackData.is_playing ? 'track-status playing' : 'track-status paused';
+        }
+        if (trackProgress) trackProgress.textContent = trackData.progress;
+        if (trackDuration) trackDuration.textContent = trackData.duration;
+        if (progressBar) {
             const progressParts = trackData.progress.split(':');
             const durationParts = trackData.duration.split(':');
             const progressSeconds = parseInt(progressParts[0]) * 60 + parseInt(progressParts[1]);
             const durationSeconds = parseInt(durationParts[0]) * 60 + parseInt(durationParts[1]);
             const progressPercent = durationSeconds > 0 ? (progressSeconds / durationSeconds) * 100 : 0;
-            container.innerHTML = 
-                '<div style="display: flex; align-items: center; gap: 20px; padding: 20px; background: var(--bg-tertiary); border-radius: 12px; border-left: 4px solid var(--accent-color);">' +
-                    '<div style="flex: 1;">' +
-                        '<div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 10px;">' +
-                            '<div style="flex: 1;">' +
-                                '<div style="font-size: 18px; font-weight: bold; margin-bottom: 4px; color: var(--text-primary);">' + trackData.song + '</div>' +
-                                '<div style="color: var(--text-secondary); margin-bottom: 2px; font-size: 14px;">by ' + trackData.artist + '</div>' +
-                                '<div style="color: var(--text-secondary); font-size: 12px;">on ' + trackData.album + '</div>' +
-                            '</div>' +
-                            '<div style="text-align: right; min-width: 80px;">' +
-                                '<div style="font-size: 12px; color: ' + (trackData.is_playing ? 'var(--accent-color)' : 'var(--text-secondary)') + '; font-weight: bold;">' +
-                                    (trackData.is_playing ? '▶ PLAYING' : '⏸ PAUSED') +
-                                '</div>' +
-                            '</div>' +
-                        '</div>' +
-                        '<div style="margin-top: 15px;">' +
-                            '<div style="display: flex; justify-content: space-between; font-size: 11px; color: var(--text-secondary); margin-bottom: 8px;">' +
-                                '<span>' + trackData.progress + '</span>' +
-                                '<span>' + trackData.duration + '</span>' +
-                            '</div>' +
-                            '<div style="width: 100%; height: 8px; background: var(--border-color); border-radius: 4px; overflow: hidden; position: relative;">' +
-                                '<div style="width: ' + progressPercent + '%; height: 100%; background: linear-gradient(90deg, var(--accent-color), #4dabf7); border-radius: 4px; transition: width 1s ease-in-out; position: relative; ' + (trackData.is_playing ? 'animation: pulse 2s infinite;' : '') + '">' +
-                                    '<div style="position: absolute; right: 0; top: 50%; transform: translateY(-50%); width: 12px; height: 12px; background: white; border-radius: 50%; box-shadow: 0 0 4px rgba(0,0,0,0.3);"></div>' +
-                                '</div>' +
-                            '</div>' +
-                        '</div>' +
-                    '</div>' +
-                '</div>';
-            updateControlButtonsFromTrack(trackData);
-        } else {
-            container.innerHTML = 
-                '<div style="padding: 30px; text-align: center; background: var(--bg-tertiary); border-radius: 12px; color: var(--text-secondary); border: 1px dashed var(--border-color);">' +
-                    '<div style="font-size: 48px; margin-bottom: 10px;">🎵</div>' +
-                    '<div style="font-size: 16px; font-weight: bold; margin-bottom: 5px;">No track currently playing</div>' +
-                    '<div style="font-size: 12px;">Play something on Spotify to see it here</div>' +
-                '</div>';
-            resetControlButtons();
+            progressBar.style.width = progressPercent + '%';
+            if (trackData.is_playing) {
+                progressBar.style.animation = 'pulse 2s infinite';
+            } else {
+                progressBar.style.animation = 'none';
+            }
         }
+        updateControlButtonsFromTrack(trackData);
+    }
+    function updateNoTrackDisplay() {
+        const trackTitle = document.getElementById('trackTitle');
+        const trackArtist = document.getElementById('trackArtist');
+        const trackAlbum = document.getElementById('trackAlbum');
+        const trackStatus = document.getElementById('trackStatus');
+        const trackProgress = document.getElementById('trackProgress');
+        const trackDuration = document.getElementById('trackDuration');
+        const progressBar = document.getElementById('progressBar');
+        const albumArtImg = document.getElementById('albumArtImg');
+        const albumArtPlaceholder = document.getElementById('albumArtPlaceholder');
+        if (trackTitle) trackTitle.textContent = 'No track currently playing';
+        if (trackArtist) trackArtist.textContent = '';
+        if (trackAlbum) trackAlbum.textContent = '';
+        if (trackStatus) {
+            trackStatus.textContent = '';
+            trackStatus.className = 'track-status';
+        }
+        if (trackProgress) trackProgress.textContent = '0:00';
+        if (trackDuration) trackDuration.textContent = '0:00';
+        if (progressBar) {
+            progressBar.style.width = '0%';
+            progressBar.style.animation = 'none';
+        }
+        if (albumArtImg && albumArtPlaceholder) {
+            albumArtImg.style.display = 'none';
+            albumArtPlaceholder.style.display = 'flex';
+        }
+        resetControlButtons();
     }
     function getCurrentVolume() {
         return fetch('/spotify_get_volume')

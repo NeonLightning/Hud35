@@ -139,6 +139,7 @@ waveshare_lock = RLock()
 file_write_lock = threading.Lock()
 last_activity_time = time.time()
 display_sleeping = False
+last_saved_album_art_hash = None
 
 def load_config(path="config.toml"):
     if not os.path.exists(path):
@@ -1181,7 +1182,6 @@ def spotify_loop():
             sp = authenticate_spotify_interactive()
     else:
         sp = authenticate_spotify_interactive()
-    
     if sp is None:
         spotify_track = {
             "title": "Spotify Authentication Required",
@@ -1197,7 +1197,6 @@ def spotify_loop():
         if START_SCREEN == "spotify":
             update_display()
         return
-    
     last_track_id = None
     last_art_url = None
     api_error_count = 0
@@ -1230,6 +1229,7 @@ def spotify_loop():
                     spotify_track = None
                     with art_lock: 
                         album_art_image = None
+                    cleanup_album_art()
                     if current_time - last_successful_write >= write_interval:
                         write_current_track_state(None)
                         last_successful_write = current_time
@@ -1277,6 +1277,7 @@ def spotify_loop():
                                 img.thumbnail((150, 150), Image.LANCZOS)
                                 with art_lock: 
                                     album_art_image = img
+                                save_current_album_art(img, spotify_track)
                                 request_background_generation(img)
                                 album_bg_cache.clear()
                                 main_color, secondary_color = get_contrasting_colors(img)
@@ -1295,11 +1296,13 @@ def spotify_loop():
                                     spotify_track['main_color'] = (0, 255, 0)
                                     spotify_track['secondary_color'] = (0, 255, 255)
                         last_art_url = art_url
+                        save_current_album_art(img, spotify_track)
                     else:
                         with art_lock: 
                             album_art_image = None
                         spotify_track['main_color'] = (0, 255, 0)
                         spotify_track['secondary_color'] = (0, 255, 255)
+                        save_current_album_art(None, spotify_track)
                 except Exception as e:
                     print(f"❌ Error loading album art: {e}")
                     with art_lock: 
@@ -1579,6 +1582,34 @@ def display_image_on_original_fb(image):
     except Exception as e:
         print(f"Framebuffer error: {e}")
 
+def save_current_album_art(album_art_image, track_data=None):
+    global last_saved_album_art_hash
+    try:
+        os.makedirs('static', exist_ok=True)
+        if album_art_image is None:
+            if os.path.exists('static/current_album_art.jpg'):
+                os.remove('static/current_album_art.jpg')
+                last_saved_album_art_hash = None
+                print(f"✅ Album art removed for web display")
+            return
+        current_hash = hash(album_art_image.tobytes())
+        if current_hash == last_saved_album_art_hash:
+            return
+        display_size = (300, 300)
+        resized_art = album_art_image.resize(display_size, Image.LANCZOS)
+        resized_art.save('static/current_album_art.jpg', 'JPEG', quality=85)
+        last_saved_album_art_hash = current_hash
+        print(f"✅ Album art saved for web display (track: {track_data.get('title', 'Unknown') if track_data else 'Unknown'})")
+    except Exception as e:
+        print(f"❌ Error saving album art for web: {e}")
+
+def cleanup_album_art():
+    try:
+        if os.path.exists('static/current_album_art.jpg'):
+            os.remove('static/current_album_art.jpg')
+    except Exception as e:
+        print(f"Error cleaning up album art: {e}")
+
 def find_touchscreen():
     for path in evdev.list_devices():
         dev = evdev.InputDevice(path)
@@ -1816,7 +1847,9 @@ def display_image_on_framebuffer(image):
         return
     last_display_time = now
     display_type = config.get("display", {}).get("type", "framebuffer")
-    if display_type == "st7789" and HAS_ST7789:
+    if display_type == "dummy":
+        display_image_on_dummy()
+    elif display_type == "st7789" and HAS_ST7789:
         display_image_on_st7789(image)
     elif display_type == "waveshare_epd" and HAS_WAVESHARE_EPD:
         display_image_on_waveshare(image)
@@ -1841,7 +1874,9 @@ def update_display():
 
 def clear_framebuffer():
     display_type = config.get("display", {}).get("type", "framebuffer")
-    if display_type == "waveshare_epd" and HAS_WAVESHARE_EPD:
+    if display_type == "dummy":
+        return
+    elif display_type == "waveshare_epd" and HAS_WAVESHARE_EPD:
         try:
             from waveshare_epd.epd2in13_V3 import EPD
             epd = EPD()
@@ -1896,6 +1931,9 @@ def capture_frames_background():
         print(f"✅ Saved {path}")
         time.sleep(0.5)
     print("⏹️ Capture complete.")
+
+def display_image_on_dummy():
+    pass
 
 def update_activity():
     global last_activity_time, display_sleeping
