@@ -849,6 +849,40 @@
         }
         resetControlButtons();
     });
+    function updateAppStatus() {
+        fetch('/status/hud35')
+            .then(response => response.json())
+            .then(data => {
+                const hud35Status = document.querySelector('.control-panel:nth-child(1) .app-status');
+                if (hud35Status) {
+                    if (data.running) {
+                        hud35Status.textContent = 'Status: ✅ RUNNING';
+                        hud35Status.className = 'app-status running';
+                    } else {
+                        hud35Status.textContent = 'Status: ❌ STOPPED';
+                        hud35Status.className = 'app-status stopped';
+                    }
+                }
+            })
+            .catch(error => console.error('Error fetching HUD35 status:', error));
+        fetch('/status/neonwifi')
+            .then(response => response.json())
+            .then(data => {
+                const neonwifiStatus = document.querySelector('.control-panel:nth-child(2) .app-status');
+                if (neonwifiStatus) {
+                    if (data.running) {
+                        neonwifiStatus.textContent = 'Status: ✅ RUNNING';
+                        neonwifiStatus.className = 'app-status running';
+                    } else {
+                        neonwifiStatus.textContent = 'Status: ❌ STOPPED';
+                        neonwifiStatus.className = 'app-status stopped';
+                    }
+                }
+            })
+            .catch(error => console.error('Error fetching neonwifi status:', error));
+    }
+    setInterval(updateAppStatus, 3000);
+    document.addEventListener('DOMContentLoaded', updateAppStatus);
 </script>
 </body>
 </html>

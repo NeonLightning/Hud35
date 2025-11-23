@@ -367,6 +367,25 @@ def stop_hud35():
             hud35_process.wait()
         hud35_process = None
         last_logged_song = None
+        try:
+            if os.path.exists('.current_track_state.toml'):
+                with open('.current_track_state.toml', 'w') as f:
+                    empty_state = {
+                        'current_track': {
+                            'title': 'No track playing',
+                            'artists': '',
+                            'album': '',
+                            'current_position': 0,
+                            'duration': 0,
+                            'is_playing': False,
+                            'timestamp': time.time()
+                        }
+                    }
+                    toml.dump(empty_state, f)
+                logger.info("Cleared current track state")
+        except Exception as e:
+            logger.error(f"Error clearing track state: {e}")
+        
         logger.info("HUD35 stopped successfully")
         return True, "HUD35 stopped successfully"
     except Exception as e:
@@ -425,6 +444,14 @@ def stop_neonwifi():
     except Exception as e:
         logger.error(f"Error stopping neonwifi: {str(e)}")
         return False, f"Error stopping neonwifi: {str(e)}"
+
+@app.route('/status/hud35')
+def status_hud35():
+    return {'running': is_hud35_running()}
+
+@app.route('/status/neonwifi')
+def status_neonwifi():
+    return {'running': is_neonwifi_running()}
 
 def rate_limit(min_interval=0.5):
     def decorator(f):
@@ -1284,6 +1311,16 @@ def update_song_count(song_info):
 
 def get_current_track():
     try:
+        if not is_hud35_running():
+            return {
+                'song': 'No track playing',
+                'artist': '',
+                'album': '',
+                'progress': '0:00',
+                'duration': '0:00',
+                'is_playing': False,
+                'has_track': False
+            }
         state_file = '.current_track_state.toml'
         if os.path.exists(state_file):
             state_data = toml.load(state_file)

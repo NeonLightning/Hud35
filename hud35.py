@@ -26,7 +26,7 @@ CLOCK_COLOR = "black"
 
 DEFAULT_CONFIG = {
     "display": {
-        "type": "framebuffer",
+        "type": "dummy",
         "framebuffer": "/dev/fb1",
         "rotation": 0,
         "st7789": {
@@ -176,6 +176,7 @@ if config["display"]["type"] == "waveshare_epd":
     except ImportError:
         HAS_WAVESHARE_EPD = False
         EPD = None
+HAS_ST7789 = False
 if config["display"]["type"] == "st7789":
     try:
         import st7789
@@ -1873,6 +1874,8 @@ def update_display():
     display_image_on_framebuffer(img)
 
 def clear_framebuffer():
+    global HAS_ST7789  # Add this to access the global variable
+    
     display_type = config.get("display", {}).get("type", "framebuffer")
     if display_type == "dummy":
         return
@@ -1886,20 +1889,47 @@ def clear_framebuffer():
             epd.sleep()
             return
         except Exception as e:
-            from waveshare_epd.epd2in13_V3 import EPD
-            epd = EPD()
-            epd.init()
-            epd.Clear(0xFF)
-            epd.sleep()
+            try:
+                from waveshare_epd.epd2in13_V3 import EPD
+                epd = EPD()
+                epd.init()
+                epd.Clear(0xFF)
+                epd.sleep()
+            except Exception as e2:
+                print(f"Failed to clear waveshare display: {e2}")
     elif display_type == "st7789" and HAS_ST7789 and st7789_display:
         black_img = Image.new("RGB", (320, 240), "black")
         st7789_display.display(black_img)
     else:
+        # PROPER framebuffer clearing
         try:
-            with open(FRAMEBUFFER, "wb") as f:
-                f.write(b'\x00\x00' * SCREEN_AREA)
-        except:
-            pass
+            # Method 1: Create and display a proper black image
+            black_image = Image.new("RGB", (SCREEN_WIDTH, SCREEN_HEIGHT), "black")
+            display_image_on_original_fb(black_image)
+            
+            # Method 2: Write black pixels directly (with proper file handling)
+            try:
+                with open(FRAMEBUFFER, "wb") as f:
+                    # Write proper black pixels in RGB565 format
+                    black_pixel = b'\x00\x00'  # RGB565 black
+                    f.write(black_pixel * SCREEN_WIDTH * SCREEN_HEIGHT)
+                    # Flush BEFORE closing the file
+                    f.flush()
+                    os.fsync(f.fileno())
+            except Exception as e:
+                print(f"Direct framebuffer write failed: {e}")
+            
+            print(f"✅ Framebuffer cleared: {FRAMEBUFFER}")
+            
+        except Exception as e:
+            print(f"❌ Error clearing framebuffer: {e}")
+            # Fallback to ST7789 if available
+            if HAS_ST7789:
+                try:
+                    black_img = Image.new("RGB", (320, 240), "black")
+                    display_image_on_st7789(black_img)
+                except:
+                    pass
 
 def cleanup_scroll_state():
     with scroll_lock:
@@ -1910,27 +1940,6 @@ def cleanup_scroll_state():
             draw_waveshare_simple.title_scroll_offset = 0
         if hasattr(draw_waveshare_simple, 'artist_scroll_offset'):
             draw_waveshare_simple.artist_scroll_offset = 0
-
-def capture_frames_background():
-    time.sleep(30)
-    print("📸 Starting non-blocking frame capture...")
-    output_dir = "capture_frames"
-    os.makedirs(output_dir, exist_ok=True)
-    display_type = config.get("display", {}).get("type", "framebuffer")
-    for i in range(30):
-        if display_type == "waveshare_epd" and HAS_WAVESHARE_EPD:
-            img = draw_waveshare_simple(weather_info, spotify_track)
-            img_rgb = img.convert("RGB")
-        else:
-            if START_SCREEN == "weather":
-                img_rgb = draw_weather_image(weather_info)
-            else:
-                img_rgb = draw_spotify_image(spotify_track)
-        path = os.path.join(output_dir, f"frame_{i:03d}.png")
-        img_rgb.save(path)
-        print(f"✅ Saved {path}")
-        time.sleep(0.5)
-    print("⏹️ Capture complete.")
 
 def display_image_on_dummy():
     pass
@@ -1960,6 +1969,7 @@ def signal_handler(sig, frame):
 def main():
     signal.signal(signal.SIGTERM, signal_handler)
     signal.signal(signal.SIGINT, signal_handler)
+    
     Thread(target=background_generation_worker, daemon=True).start()
     Thread(target=weather_loop, daemon=True).start()
     Thread(target=spotify_loop, daemon=True).start()
@@ -1967,8 +1977,9 @@ def main():
     Thread(target=handle_buttons, daemon=True).start()
     Thread(target=animate_images, daemon=True).start()
     Thread(target=animate_text_scroll, daemon=True).start()
-    #Thread(target=capture_frames_background, daemon=True).start()
+    
     update_display()
+    
     try:
         while not exit_event.is_set():
             check_display_sleep()
@@ -1977,10 +1988,39 @@ def main():
     except KeyboardInterrupt:
         print("\nShutting down...")
     finally:
+        print("🔄 Starting cleanup...")
+        
+        # Show "no track playing" screen before full shutdown
+        global START_SCREEN, spotify_track
+        original_screen = START_SCREEN
+        START_SCREEN = "spotify"
+        spotify_track = None
+        update_spotify_layout(None)
+        
+        # Update display to show "no track playing"
+        try:
+            update_display()
+            time.sleep(0.3)  # Give it time to render
+        except:
+            pass
+        
         cleanup_scroll_state()
-        clear_framebuffer()
-        time.sleep(0.3)
+        
+        # Give threads time to stop
         exit_event.set()
+        time.sleep(0.5)
+        
+        # Clear display
+        clear_framebuffer()
+        
+        # Additional cleanup for GPIO
+        if HAS_GPIO:
+            try:
+                GPIO.cleanup()
+            except:
+                pass
+        
+        print("✅ Cleanup complete")
 
 if __name__ == "__main__":
     main()
