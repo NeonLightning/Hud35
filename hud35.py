@@ -1173,7 +1173,7 @@ def spotify_loop():
     last_token_check = time.time()
     token_check_interval = 150
     last_successful_write = 0
-    write_interval = 2
+    write_interval = 0.5
     base_track_check_interval = 5
     idle_check_interval = 30
     last_api_call = 0
@@ -1377,7 +1377,7 @@ def spotify_loop():
                     should_write = True
                 elif is_playing and current_time - last_successful_write >= write_interval:
                     should_write = True
-                elif not is_playing and current_time - last_successful_write >= 5:
+                elif not is_playing and current_time - last_successful_write >= 0.5:
                     should_write = True
                 if START_SCREEN == "spotify":
                     update_display()
