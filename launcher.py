@@ -363,18 +363,26 @@ def is_neonwifi_running():
 def parse_song_from_log(log_line):
     if 'Now playing:' in log_line:
         try:
+            # Extract the song part
             if '🎵 Now playing:' in log_line:
                 song_part = log_line.split('🎵 Now playing: ')[1].strip()
             else:
                 song_part = log_line.split('Now playing: ')[1].strip()
-            if ' -- ' in song_part:
-                artist_part, song = song_part.split(' -- ', 1)
-            elif ' - ' in song_part:
-                artist_part, song = song_part.split(' - ', 1)
-            else:
+            separators = [' -- ', ' - ', ' – ']
+            artist_part = 'Unknown Artist'
+            song = song_part
+            
+            for separator in separators:
+                if separator in song_part:
+                    artist_part, song = song_part.split(separator, 1)
+                    break
+            artists = []
+            if artist_part != 'Unknown Artist':
+                artists = [artist.strip() for artist in artist_part.split(',')]
+                artists = [artist for artist in artists if artist]
+            if not artists:
+                artists = ['Unknown Artist']
                 artist_part = 'Unknown Artist'
-                song = song_part
-            artists = [artist.strip() for artist in artist_part.split(',')]
             return {
                 'song': song.strip(),
                 'artist': artist_part.strip(),
@@ -772,7 +780,7 @@ def music_stats_data():
         lines = int(request.args.get('lines', 1000))
     except:
         lines = 1000
-    song_stats, artist_stats, total_plays, unique_songs, unique_artists = generate_music_stats(None, lines)
+    song_stats, artist_stats, total_plays, unique_songs, unique_artists = generate_music_stats(lines)
     song_chart_data = generate_chart_data(song_stats, 'Songs')
     artist_chart_data = generate_chart_data(artist_stats, 'Artists')
     song_chart_items = list(zip(song_chart_data['labels'], song_chart_data['data'], song_chart_data['colors']))
@@ -793,7 +801,7 @@ def music_stats():
         lines = int(request.args.get('lines', 1000))
     except:
         lines = 1000
-    song_stats, artist_stats, total_plays, unique_songs, unique_artists = generate_music_stats(None, lines)
+    song_stats, artist_stats, total_plays, unique_songs, unique_artists = generate_music_stats(lines)
     song_chart_data = generate_chart_data(song_stats, 'Songs')
     artist_chart_data = generate_chart_data(artist_stats, 'Artists')
     song_chart_items = list(zip(song_chart_data['labels'], song_chart_data['data'], song_chart_data['colors']))
@@ -1457,7 +1465,7 @@ def load_song_counts():
         logger.error(f"Error loading song counts: {e}")
         return {}
 
-def generate_music_stats(song_counts, max_items=1000):
+def generate_music_stats(max_items=1000):
     try:
         if not hasattr(generate_music_stats, 'db_conn'):
             generate_music_stats.db_conn = init_song_database()
@@ -1466,34 +1474,32 @@ def generate_music_stats(song_counts, max_items=1000):
         total_plays, unique_songs = cursor.fetchone()
         total_plays = total_plays or 0
         cursor.execute('''
-            SELECT COUNT(DISTINCT 
-                CASE 
-                    WHEN song_data LIKE '% -- %' THEN substr(song_data, 1, instr(song_data, ' -- ') - 1)
-                    ELSE 'Unknown Artist'
-                END
-            ) FROM song_plays
-        ''')
-        unique_artists = cursor.fetchone()[0] or 0
-        cursor.execute('''
             SELECT song_data, play_count 
             FROM song_plays 
             ORDER BY play_count DESC, last_played DESC
             LIMIT ?
         ''', (max_items,))
-        song_stats = dict(cursor.fetchall())
-        cursor.execute('''
-            SELECT 
-                CASE 
-                    WHEN song_data LIKE '% -- %' THEN substr(song_data, 1, instr(song_data, ' -- ') - 1)
-                    ELSE 'Unknown Artist'
-                END as artist,
-                SUM(play_count) as total_plays
-            FROM song_plays 
-            GROUP BY artist
-            ORDER BY total_plays DESC
-            LIMIT ?
-        ''', (max_items,))
-        artist_stats = dict(cursor.fetchall())
+        song_stats = {}
+        for song_data, play_count in cursor.fetchall():
+            song_stats[song_data] = play_count
+        cursor.execute('SELECT song_data, play_count FROM song_plays')
+        artist_stats = {}
+        all_artists_set = set()
+        for song_data, play_count in cursor.fetchall():
+            if ' -- ' in song_data:
+                artist_part = song_data.split(' -- ')[0].strip()
+                artists = [artist.strip() for artist in artist_part.split(',')]
+                for artist in artists:
+                    if artist:
+                        artist_stats[artist] = artist_stats.get(artist, 0) + play_count
+                        all_artists_set.add(artist)
+            else:
+                unknown_artist = 'Unknown Artist'
+                artist_stats[unknown_artist] = artist_stats.get(unknown_artist, 0) + play_count
+                all_artists_set.add(unknown_artist)
+        sorted_artists = sorted(artist_stats.items(), key=lambda x: x[1], reverse=True)
+        artist_stats = dict(sorted_artists[:max_items])
+        unique_artists = len(all_artists_set)
         return song_stats, artist_stats, total_plays, unique_songs, unique_artists
     except Exception as e:
         logger = logging.getLogger('Launcher')
