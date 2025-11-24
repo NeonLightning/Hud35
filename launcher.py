@@ -4,7 +4,7 @@ from spotipy.oauth2 import SpotifyOAuth
 from datetime import datetime
 from collections import Counter
 from functools import wraps
-import os, toml, time, requests, subprocess, sys, signal, urllib.parse, socket, logging, threading, json, zlib, pickle, hashlib, spotipy, io
+import os, toml, time, requests, subprocess, sys, signal, urllib.parse, socket, logging, threading, json, zlib, pickle, hashlib, spotipy, io, sqlite3, shutil
 
 app = Flask(__name__)
 @app.after_request
@@ -745,15 +745,11 @@ def music_stats_data():
         lines = int(request.args.get('lines', 1000))
     except:
         lines = 1000
-    song_counts = load_song_counts()
-    song_stats, artist_stats = generate_music_stats(song_counts, lines)
+    song_stats, artist_stats, total_plays, unique_songs, unique_artists = generate_music_stats(None, lines)
     song_chart_data = generate_chart_data(song_stats, 'Songs')
     artist_chart_data = generate_chart_data(artist_stats, 'Artists')
     song_chart_items = list(zip(song_chart_data['labels'], song_chart_data['data'], song_chart_data['colors']))
     artist_chart_items = list(zip(artist_chart_data['labels'], artist_chart_data['data'], artist_chart_data['colors']))
-    total_plays = sum(song_counts.values())
-    unique_songs = len(song_counts)
-    unique_artists = len(artist_stats)
     return {
         'song_chart_items': song_chart_items,
         'artist_chart_items': artist_chart_items,
@@ -770,15 +766,11 @@ def music_stats():
         lines = int(request.args.get('lines', 1000))
     except:
         lines = 1000
-    song_counts = load_song_counts()
-    song_stats, artist_stats = generate_music_stats(song_counts, lines)
+    song_stats, artist_stats, total_plays, unique_songs, unique_artists = generate_music_stats(None, lines)
     song_chart_data = generate_chart_data(song_stats, 'Songs')
     artist_chart_data = generate_chart_data(artist_stats, 'Artists')
     song_chart_items = list(zip(song_chart_data['labels'], song_chart_data['data'], song_chart_data['colors']))
     artist_chart_items = list(zip(artist_chart_data['labels'], artist_chart_data['data'], artist_chart_data['colors']))
-    total_plays = sum(song_counts.values())
-    unique_songs = len(song_counts)
-    unique_artists = len(artist_stats)
     return render_template('music_stats.html', 
                         song_chart_items=song_chart_items,
                         artist_chart_items=artist_chart_items,
@@ -1147,6 +1139,13 @@ def search_results():
 @app.route('/clear_song_logs', methods=['POST'])
 def clear_song_logs():
     try:
+        functions_with_conn = [update_song_count, load_song_counts, generate_music_stats]
+        for func in functions_with_conn:
+            if hasattr(func, 'db_conn'):
+                cursor = func.db_conn.cursor()
+                cursor.execute('DELETE FROM song_plays')
+                cursor.execute('VACUUM')
+                func.db_conn.commit()
         for filename in ['song_counts.bin', 'song_mapping.bin', 'song_counts.toml', 'song_counts.bin.tmp']:
             if os.path.exists(filename):
                 os.remove(filename)
@@ -1357,33 +1356,64 @@ def log_current_track_state():
         logger = logging.getLogger('Launcher')
         logger.error(f"Error logging from current track state: {e}")
 
+def init_song_database():
+    conn = sqlite3.connect('song_stats.db', check_same_thread=False)
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS song_plays (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            song_hash TEXT UNIQUE,
+            song_data TEXT,
+            play_count INTEGER DEFAULT 0,
+            last_played TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_count ON song_plays(play_count)')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_hash ON song_plays(song_hash)')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_last_played ON song_plays(last_played)')
+    conn.commit()
+    return conn
+
+def backup_db_if_needed():
+    try:
+        backup_file = 'song_stats.db.backup'
+        if not os.path.exists(backup_file) or \
+            (time.time() - os.path.getmtime(backup_file)) > 1800:
+            if os.path.exists('song_stats.db'):
+                shutil.copy2('song_stats.db', backup_file)
+                logger = logging.getLogger('Launcher')
+                logger.info(f"✅ Database backed up to {backup_file}")
+    except Exception as e:
+        logger = logging.getLogger('Launcher')
+        logger.error(f"❌ Database backup failed: {e}")
+
 def update_song_count(song_info):
     global last_logged_song
     logger = logging.getLogger('Launcher')
     current_song = song_info.get('full_track', '').strip()
     if last_logged_song and current_song == last_logged_song:
         return
-    try:
-        all_data = {'counts': {}, 'mapping': {}}
-        if os.path.exists('song_counts.bin'):
-            try:
-                with open('song_counts.bin', 'rb') as f:
-                    compressed_data = f.read()
-                    if compressed_data:
-                        all_data = pickle.loads(zlib.decompress(compressed_data))
-            except (zlib.error, EOFError, pickle.UnpicklingError) as e:
-                logger.warning(f"Corrupted song counts file, starting fresh: {e}")
-                all_data = {'counts': {}, 'mapping': {}}
-        song_hash = hashlib.md5(current_song.encode('utf-8')).hexdigest()[:16]
-        all_data['counts'][song_hash] = all_data['counts'].get(song_hash, 0) + 1
-        all_data['mapping'][song_hash] = current_song
-        temp_file = 'song_counts.bin.tmp'
-        with open(temp_file, 'wb') as f:
-            f.write(zlib.compress(pickle.dumps(all_data, protocol=pickle.HIGHEST_PROTOCOL), level=9))
-        os.replace(temp_file, 'song_counts.bin')
-        last_logged_song = current_song
-    except Exception as e:
-        logger.error(f"Error updating song count: {e}")
+    songlock = threading.Lock()
+    with songlock:
+        try:
+            if not hasattr(update_song_count, 'db_conn'):
+                update_song_count.db_conn = init_song_database()
+            if not song_info or not current_song:
+                return
+            song_hash = hashlib.md5(current_song.encode('utf-8')).hexdigest()[:16]
+            cursor = update_song_count.db_conn.cursor()
+            cursor.execute('''
+                INSERT INTO song_plays (song_hash, song_data, play_count, last_played)
+                VALUES (?, ?, 1, datetime('now'))
+                ON CONFLICT(song_hash) DO UPDATE SET 
+                play_count = play_count + 1,
+                last_played = datetime('now')
+            ''', (song_hash, current_song))
+            update_song_count.db_conn.commit()
+            backup_db_if_needed()
+            last_logged_song = current_song
+        except Exception as e:
+            logger.error(f"Error updating song count: {e}")
 
 def get_current_track():
     try:
@@ -1446,25 +1476,21 @@ def get_current_track():
         }
 
 def load_song_counts():
-    if not os.path.exists('song_counts.bin'):
-        return {}
     try:
-        with open('song_counts.bin', 'rb') as f:
-            compressed_data = f.read()
-            if not compressed_data:
-                return {}
-            all_data = pickle.loads(zlib.decompress(compressed_data))
-        named_counts = {}
-        for song_hash, count in all_data['counts'].items():
-            named_counts[all_data['mapping'].get(song_hash, f"Unknown_{song_hash[:8]}")] = count
-        return named_counts
-    except (zlib.error, EOFError, pickle.UnpicklingError) as e:
-        logger = logging.getLogger('Launcher')
-        logger.error(f"Error loading song counts (file may be corrupted): {e}")
-        return {}
+        if not hasattr(load_song_counts, 'db_conn'):
+            load_song_counts.db_conn = init_song_database()
+        
+        cursor = load_song_counts.db_conn.cursor()
+        cursor.execute('''
+            SELECT song_data, play_count 
+            FROM song_plays 
+            ORDER BY play_count DESC, last_played DESC
+            LIMIT 1000
+        ''')
+        return dict(cursor.fetchall())
     except Exception as e:
         logger = logging.getLogger('Launcher')
-        logger.error(f"Unexpected error loading song counts: {e}")
+        logger.error(f"Error loading song counts: {e}")
         return {}
 
 def save_song_counts(song_counts):
@@ -1477,31 +1503,47 @@ def save_song_counts(song_counts):
         logger.error(f"Error saving song counts: {e}")
 
 def generate_music_stats(song_counts, max_items=1000):
-    def get_artist_for_sort(song_key):
-        if ' -- ' in song_key:
-            return song_key.split(' -- ', 1)[0].lower()
-        return song_key.lower()
-    sorted_songs = sorted(
-        song_counts.items(),
-        key=lambda x: (-x[1], get_artist_for_sort(x[0]))
-    )
-    top_songs = dict(sorted_songs[:max_items])
-    artist_counter = Counter()
-    for song_key, count in song_counts.items():
-        if ' -- ' in song_key:
-            try:
-                artist_part = song_key.split(' -- ', 1)[0]
-                artists = [a.strip() for a in artist_part.split(',')]
-                for artist in artists:
-                    if artist and artist != 'Unknown Artist':
-                        artist_counter[artist] += count
-            except:
-                artist_counter['Unknown Artist'] += count
-        else:
-            artist_counter['Unknown Artist'] += count
-    sorted_artists = sorted(artist_counter.items(), key=lambda x: (-x[1], x[0].lower()))
-    top_artists = dict(sorted_artists[:max_items])
-    return top_songs, top_artists
+    try:
+        if not hasattr(generate_music_stats, 'db_conn'):
+            generate_music_stats.db_conn = init_song_database()
+        cursor = generate_music_stats.db_conn.cursor()
+        cursor.execute('SELECT SUM(play_count), COUNT(*) FROM song_plays')
+        total_plays, unique_songs = cursor.fetchone()
+        total_plays = total_plays or 0
+        cursor.execute('''
+            SELECT COUNT(DISTINCT 
+                CASE 
+                    WHEN song_data LIKE '% -- %' THEN substr(song_data, 1, instr(song_data, ' -- ') - 1)
+                    ELSE 'Unknown Artist'
+                END
+            ) FROM song_plays
+        ''')
+        unique_artists = cursor.fetchone()[0] or 0
+        cursor.execute('''
+            SELECT song_data, play_count 
+            FROM song_plays 
+            ORDER BY play_count DESC, last_played DESC
+            LIMIT ?
+        ''', (max_items,))
+        song_stats = dict(cursor.fetchall())
+        cursor.execute('''
+            SELECT 
+                CASE 
+                    WHEN song_data LIKE '% -- %' THEN substr(song_data, 1, instr(song_data, ' -- ') - 1)
+                    ELSE 'Unknown Artist'
+                END as artist,
+                SUM(play_count) as total_plays
+            FROM song_plays 
+            GROUP BY artist
+            ORDER BY total_plays DESC
+            LIMIT ?
+        ''', (max_items,))
+        artist_stats = dict(cursor.fetchall())
+        return song_stats, artist_stats, total_plays, unique_songs, unique_artists
+    except Exception as e:
+        logger = logging.getLogger('Launcher')
+        logger.error(f"Error generating music stats: {e}")
+        return {}, {}, 0, 0, 0
 
 def generate_chart_data(stats, label_type):
     if not stats:
@@ -1523,6 +1565,14 @@ def cleanup():
     logger = logging.getLogger('Launcher')
     global hud35_process, neonwifi_process
     logger.info("🧹 Performing cleanup...")
+    functions_with_conn = [update_song_count, load_song_counts, generate_music_stats]
+    for func in functions_with_conn:
+        if hasattr(func, 'db_conn'):
+            try:
+                func.db_conn.close()
+                logger.info(f"Closed database connection for {func.__name__}")
+            except Exception as e:
+                logger.error(f"Error closing database connection for {func.__name__}: {e}")
     if hud35_process and hud35_process.poll() is None:
         logger.info("Stopping HUD35 process...")
         hud35_process.terminate()

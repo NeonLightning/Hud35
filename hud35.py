@@ -183,6 +183,18 @@ if config["display"]["type"] == "st7789":
         HAS_ST7789 = True
     except ImportError:
         HAS_ST7789 = False
+display_type = config.get("display", {}).get("type", "framebuffer")
+if display_type == "st7789":
+    ANIMATION_FPS = 30
+    TEXT_SCROLL_FPS = 30
+elif display_type == "waveshare_epd":
+    ANIMATION_FPS = 2
+    TEXT_SCROLL_FPS = 2
+else:
+    ANIMATION_FPS = 15
+    TEXT_SCROLL_FPS = 15
+ANIMATION_FRAME_TIME = 1.0 / ANIMATION_FPS
+TEXT_SCROLL_FRAME_TIME = 1.0 / TEXT_SCROLL_FPS
 SLEEP_TIMEOUT = 300
 LARGE_FONT = ImageFont.truetype(config["fonts"]["large_font_path"], config["fonts"]["large_font_size"])
 MEDIUM_FONT = ImageFont.truetype(config["fonts"]["medium_font_path"], config["fonts"]["medium_font_size"])
@@ -423,7 +435,7 @@ def background_generation_worker():
     global spotify_bg_cache, current_album_art_hash, clock_bg_image
     while not exit_event.is_set():
         try:
-            album_img, size, bg_type = bg_generation_queue.get(timeout=1)
+            album_img, size, bg_type = bg_generation_queue.get(timeout=5)
             if bg_type == "spotify":
                 generated_bg = get_cached_background(size, album_img)
                 with spotify_bg_cache_lock:
@@ -1162,8 +1174,8 @@ def spotify_loop():
     token_check_interval = 150
     last_successful_write = 0
     write_interval = 2
-    base_track_check_interval = 2
-    idle_check_interval = 10
+    base_track_check_interval = 5
+    idle_check_interval = 30
     last_api_call = 0
     consecutive_no_track_count = 0
     max_consecutive_no_track = 15
@@ -1420,7 +1432,7 @@ def weather_loop():
     GEO_UPDATE_INTERVAL = 900
     while not exit_event.is_set():
         now = time.time()
-        if now - last_cache_cleanup > 300:
+        if now - last_cache_cleanup > 600:
             cleanup_caches()
             last_cache_cleanup = now
         if now - last_geo > GEO_UPDATE_INTERVAL:
@@ -1451,10 +1463,13 @@ def weather_loop():
         if START_SCREEN == "weather" and now - last_display_update >= 1:
             update_display()
             last_display_update = now
-        time.sleep(0.5)
+        time.sleep(2)
 
 def animate_text_scroll():
     while not exit_event.is_set():
+        if display_sleeping:
+            time.sleep(0.5)
+            continue
         with scroll_lock:
             for key in scroll_state:
                 state = scroll_state[key]
@@ -1462,22 +1477,20 @@ def animate_text_scroll():
                     state["offset"] += 2
                     if state["offset"] >= state["max_offset"]:
                         state["offset"] = 0
-        time.sleep(1/15)
+        time.sleep(TEXT_SCROLL_FRAME_TIME)
 
 def animate_images():
     global START_SCREEN, art_pos, art_velocity, artist_pos, artist_velocity, artist_on_top
     last_animation_time = time.time()
     while not exit_event.is_set():
+        if display_sleeping:
+            time.sleep(0.5)
+            continue
         current_time = time.time()
         frame_time = current_time - last_animation_time
         last_animation_time = current_time        
-        display_type = config.get("display", {}).get("type", "framebuffer")
-        if display_type == "st7789" and HAS_ST7789:
-            speed_factor = 0.4
-            step_multiplier = 1
-        else:
-            speed_factor = 0.4
-            step_multiplier = 0.8
+        speed_factor = 0.4
+        step_multiplier = 0.8
         needs_update = False
         with art_lock:
             album_img = album_art_image
@@ -1525,7 +1538,7 @@ def animate_images():
             needs_update = True
         if needs_update and START_SCREEN == "spotify":
             update_display()
-        time.sleep(1/60)
+        time.sleep(ANIMATION_FRAME_TIME)
 
 def init_st7789_display():
     global st7789_display
@@ -1968,6 +1981,7 @@ def signal_handler(sig, frame):
     exit_event.set()
 
 def main():
+    global START_SCREEN, spotify_track
     signal.signal(signal.SIGTERM, signal_handler)
     signal.signal(signal.SIGINT, signal_handler)
     Thread(target=background_generation_worker, daemon=True).start()
@@ -1978,16 +1992,26 @@ def main():
     Thread(target=animate_images, daemon=True).start()
     Thread(target=animate_text_scroll, daemon=True).start()
     update_display()
+    screen_update_intervals = {
+        "weather": 30.0,
+        "spotify": 0.5,
+        "time": 1.0
+    }
+    last_display_update = 0
     try:
         while not exit_event.is_set():
             check_display_sleep()
-            update_display()
-            time.sleep(0.1)
+            current_time = time.time()
+            current_interval = screen_update_intervals.get(START_SCREEN, 1.0)
+            if current_time - last_display_update >= current_interval:
+                update_display()
+                last_display_update = current_time
+            sleep_time = max(0.1, current_interval * 0.5)
+            time.sleep(sleep_time)
     except KeyboardInterrupt:
         print("\nShutting down...")
     finally:
         print("🔄 Starting cleanup...")
-        global START_SCREEN, spotify_track
         original_screen = START_SCREEN
         START_SCREEN = "spotify"
         spotify_track = None
