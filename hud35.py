@@ -226,7 +226,6 @@ MIN_DISPLAY_INTERVAL = 0.001
 DEBOUNCE_TIME = 0.3
 UPDATE_INTERVAL_WEATHER = 3600
 GEO_UPDATE_INTERVAL = 900
-TOKEN_CHECK_INTERVAL = 150
 SLEEP_TIMEOUT = config["settings"]["sleep_timeout"]
 
 def get_cached_bg(bg_path, size):
@@ -891,7 +890,8 @@ def setup_spotify_oauth():
         client_secret=config["api_keys"]["client_secret"],
         redirect_uri=config["api_keys"]["redirect_uri"],
         scope=SCOPE,
-        cache_path=".spotify_cache"
+        cache_path=".spotify_cache",
+        open_browser=False,
     )
 
 def fetch_and_store_artist_image(sp, artist_id):
@@ -1022,83 +1022,20 @@ def write_current_track_state(track_data):
                 pass
 
 def initialize_spotify_client():
-    if os.path.exists(".spotify_cache"):
-        try:
-            with open(".spotify_cache", "r") as f:
-                cache_content = f.read().strip()
-                if not cache_content:
-                    os.remove(".spotify_cache")
-        except Exception:
-            try:
-                os.remove(".spotify_cache")
-            except:
-                pass
+    sp_oauth = setup_spotify_oauth()
     try:
-        sp_oauth = setup_spotify_oauth()
-        test_token = sp_oauth.get_cached_token()
-        if not test_token:
-            return None
-    except Exception:
+        sp = spotipy.Spotify(auth_manager=sp_oauth)
+        sp.current_user()
+        return sp
+    except Exception as e:
+        print(f"Spotify authentication failed: {e}")
         return None
-    token_info = sp_oauth.get_cached_token()
-    if not token_info:
-        return None
-    if not isinstance(token_info, dict):
-        try:
-            os.remove(".spotify_cache")
-        except:
-            pass
-        return None
-    if 'access_token' not in token_info:
-        return None
-    if 'expires_at' not in token_info:
-        token_info['expires_at'] = 0
-    expires_at = token_info.get('expires_at', 0)
-    current_time = time.time()
-    if current_time > expires_at - 300:
-        refresh_token = token_info.get('refresh_token')
-        if not refresh_token:
-            try:
-                os.remove(".spotify_cache")
-            except:
-                pass
-            return None
-        max_retries = 3
-        for attempt in range(max_retries):
-            try:
-                new_token_info = sp_oauth.refresh_access_token(refresh_token)
-                if new_token_info and 'access_token' in new_token_info:
-                    sp_oauth._save_token_info(new_token_info)
-                    token_info = new_token_info
-                    break
-                else:
-                    if attempt == max_retries - 1:
-                        raise Exception("Invalid token refresh response")
-            except Exception:
-                if attempt < max_retries - 1:
-                    wait_time = (attempt + 1) * 5
-                    time.sleep(wait_time)
-                else:
-                    if 'access_token' in token_info and current_time < expires_at:
-                        pass
-                    else:
-                        return None
-    access_token = token_info.get('access_token')
-    if not access_token:
-        return None
-    return spotipy.Spotify(auth=access_token, requests_timeout=30)
 
 def authenticate_spotify_interactive():
     print("\n" + "="*60)
     print("Spotify Authentication Required")
     print("="*60)
-    sp_oauth = SpotifyOAuth(
-        client_id=SPOTIFY_CLIENT_ID,
-        client_secret=SPOTIFY_CLIENT_SECRET,
-        redirect_uri=REDIRECT_URI,
-        scope=SCOPE,
-        cache_path=".spotify_cache"
-    )
+    sp_oauth = setup_spotify_oauth()
     auth_url = sp_oauth.get_authorize_url()
     print(f"Please visit this URL to authenticate:")
     print(f"{auth_url}")
@@ -1106,108 +1043,30 @@ def authenticate_spotify_interactive():
     print("Paste that full redirect URL here:")
     try:
         redirect_url = input().strip()
-        if '?code=' in redirect_url:
-            code = redirect_url.split('?code=')[1].split('&')[0]
-            token_info = sp_oauth.get_access_token(code, as_dict=False)
-        else:
-            token_info = sp_oauth.get_access_token(redirect_url, as_dict=False)
+        token_info = sp_oauth.get_access_token(redirect_url)
         if token_info:
+            sp = spotipy.Spotify(auth_manager=sp_oauth)
+            sp.current_user()
             print("✅ Authentication successful!")
-            return spotipy.Spotify(auth=token_info)
+            return sp
         else:
-            print("❌ Authentication failed.")
+            print("❌ Failed to get access token")
             return None
     except Exception as e:
         print(f"❌ Authentication error: {e}")
         return None
 
-def check_and_refresh_token(current_sp):
-    max_retries = 3
-    for attempt in range(max_retries):
-        try:
-            sp_oauth = setup_spotify_oauth()
-            token_info = sp_oauth.get_cached_token()
-            if not token_info:
-                return current_sp
-            headers = {
-                'Authorization': f"Bearer {token_info['access_token']}",
-            }
-            response = requests.get(
-                "https://api.spotify.com/v1/me",
-                headers=headers,
-                timeout=30
-            )
-            if response.status_code == 401:
-                print("🔄 Token expired, refreshing...")
-                refresh_token = token_info.get('refresh_token')
-                if refresh_token:
-                    new_token_info = sp_oauth.refresh_access_token(refresh_token)
-                    if new_token_info and 'access_token' in new_token_info:
-                        sp_oauth._save_token_info(new_token_info)
-                        print("✅ Token refreshed successfully")
-                        return spotipy.Spotify(auth=new_token_info['access_token'], requests_timeout=30)
-            expires_at = token_info.get('expires_at', 0)
-            current_time = time.time()
-            time_until_expiry = expires_at - current_time
-            if time_until_expiry < 300:
-                print("🔄 Token expiring soon, refreshing...")
-                refresh_token = token_info.get('refresh_token')
-                if refresh_token:
-                    new_token_info = sp_oauth.refresh_access_token(refresh_token)
-                    if new_token_info and 'access_token' in new_token_info:
-                        sp_oauth._save_token_info(new_token_info)
-                        print("✅ Token refreshed successfully")
-                        return spotipy.Spotify(auth=new_token_info['access_token'], requests_timeout=30)
-            return current_sp
-        except Exception as e:
-            if attempt < max_retries - 1:
-                wait_time = (attempt + 1) * 2
-                print(f"🔄 Token check attempt {attempt + 1} failed: {e}, retrying in {wait_time}s")
-                time.sleep(wait_time)
-            else:
-                print(f"❌ Token check failed after {max_retries} attempts: {e}")
-                return current_sp
-
 def spotify_loop():
     global START_SCREEN, spotify_track, sp, album_art_image, scrolling_text_cache
-    last_token_check = time.time()
-    token_check_interval = 150
     last_successful_write = 0
     write_interval = 0.5
-    base_track_check_interval = 5
+    base_track_check_interval = 2
     idle_check_interval = 30
     last_api_call = 0
     consecutive_no_track_count = 0
     max_consecutive_no_track = 15
-    if os.path.exists(".spotify_cache"):
-        try:
-            with open(".spotify_cache", "r") as f:
-                cache_content = f.read().strip()
-                if not cache_content:
-                    print("⚠️ Spotify cache file is empty")
-                    os.remove(".spotify_cache")
-                    sp = authenticate_spotify_interactive()
-                else:
-                    sp_oauth = SpotifyOAuth(
-                        client_id=SPOTIFY_CLIENT_ID,
-                        client_secret=SPOTIFY_CLIENT_SECRET,
-                        redirect_uri=REDIRECT_URI,
-                        scope=SCOPE,
-                        cache_path=".spotify_cache"
-                    )
-                    token_info = sp_oauth.get_cached_token()
-                    if token_info:
-                        sp = spotipy.Spotify(auth=token_info['access_token'], requests_timeout=30)
-                    else:
-                        sp = authenticate_spotify_interactive()
-        except Exception as e:
-            print(f"⚠️ Error reading cache file: {e}")
-            try:
-                os.remove(".spotify_cache")
-            except:
-                pass
-            sp = authenticate_spotify_interactive()
-    else:
+    sp = initialize_spotify_client()
+    if sp is None:
         sp = authenticate_spotify_interactive()
     if sp is None:
         spotify_track = {
@@ -1229,9 +1088,6 @@ def spotify_loop():
     api_error_count = 0
     while not exit_event.is_set():
         current_time = time.time()
-        if current_time - last_token_check > token_check_interval:
-            sp = check_and_refresh_token(sp)
-            last_token_check = current_time
         if api_error_count > 0:
             current_check_interval = min(10 * (2 ** min(api_error_count-1, 2)), 60)
         elif spotify_track and spotify_track.get('is_playing', False):

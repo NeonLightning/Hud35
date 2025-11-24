@@ -259,10 +259,10 @@ def is_config_ready():
 def check_spotify_auth():
     config = load_config()
     if not config["api_keys"]["client_id"] or not config["api_keys"]["client_secret"]:
-        return False, None
+        return False, "Missing client credentials"
     try:
         if not os.path.exists(".spotify_cache"):
-            return False, None
+            return False, "No cached token found"
         sp_oauth = SpotifyOAuth(
             client_id=config["api_keys"]["client_id"],
             client_secret=config["api_keys"]["client_secret"],
@@ -272,31 +272,58 @@ def check_spotify_auth():
         )
         token_info = sp_oauth.get_cached_token()
         if not token_info:
-            return False, None
-        if isinstance(token_info, dict):
-            access_token = token_info.get('access_token')
-        else:
-            access_token = token_info
+            return False, "No valid token found"
+        if sp_oauth.is_token_expired(token_info):
+            logger = logging.getLogger('Launcher')
+            logger.info("Token expired, attempting refresh...")
+            token_info = sp_oauth.refresh_access_token(token_info['refresh_token'])
             
-        if not access_token:
-            return False, None
+            if not token_info:
+                return False, "Token refresh failed"
         try:
-            headers = {
-                'Authorization': f'Bearer {access_token}',
-                'Content-Type': 'application/json'
-            }
-            response = requests.get('https://api.spotify.com/v1/me', headers=headers, timeout=5)
-            if response.status_code == 200:
-                return True, "Valid token"
-            else:
-                print(f"Token validation failed with status {response.status_code}")
-                return False, None
+            sp = spotipy.Spotify(auth=token_info['access_token'])
+            current_user = sp.current_user()
+            return True, f"Authenticated as {current_user.get('display_name', 'Unknown User')}"
         except Exception as e:
-            print(f"Token validation error: {e}")
-            return False, None
+            logger = logging.getLogger('Launcher')
+            logger.error(f"Token validation failed: {e}")
+            return False, f"Token validation failed: {str(e)}"
     except Exception as e:
-        print(f"Error checking Spotify auth: {e}")
-        return False, None
+        logger = logging.getLogger('Launcher')
+        logger.error(f"Error checking Spotify auth: {e}")
+        return False, f"Authentication error: {str(e)}"
+
+def get_spotify_client():
+    config = load_config()
+    if not config["api_keys"]["client_id"] or not config["api_keys"]["client_secret"]:
+        return None, "Missing client credentials"
+    try:
+        sp_oauth = SpotifyOAuth(
+            client_id=config["api_keys"]["client_id"],
+            client_secret=config["api_keys"]["client_secret"],
+            redirect_uri=config["api_keys"]["redirect_uri"],
+            scope="user-read-currently-playing user-modify-playback-state user-read-playback-state",
+            cache_path=".spotify_cache"
+        )
+        token_info = sp_oauth.get_cached_token()
+        if not token_info:
+            return None, "No valid token available"
+        if sp_oauth.is_token_expired(token_info):
+            logger = logging.getLogger('Launcher')
+            logger.info("Refreshing expired token...")
+            try:
+                token_info = sp_oauth.refresh_access_token(token_info['refresh_token'])
+                if not token_info:
+                    return None, "Failed to refresh token"
+            except Exception as e:
+                logger.error(f"Token refresh error: {e}")
+                return None, f"Token refresh failed: {str(e)}"
+        sp = spotipy.Spotify(auth=token_info['access_token'])
+        return sp, "Success"
+    except Exception as e:
+        logger = logging.getLogger('Launcher')
+        logger.error(f"Error creating Spotify client: {e}")
+        return None, f"Client creation failed: {str(e)}"
 
 def is_hud35_running():
     global hud35_process
@@ -850,101 +877,64 @@ def current_album_art():
 @rate_limit(0.5)
 def spotify_play():
     try:
-        config = load_config()
-        sp_oauth = SpotifyOAuth(
-            client_id=config["api_keys"]["client_id"],
-            client_secret=config["api_keys"]["client_secret"],
-            redirect_uri=config["api_keys"]["redirect_uri"],
-            scope="user-read-currently-playing user-modify-playback-state user-read-playback-state",
-            cache_path=".spotify_cache"
-        )
-        token_info = sp_oauth.get_cached_token()
-        if not token_info:
-            return {'success': False, 'error': 'Not authenticated'}
-        sp = spotipy.Spotify(auth=token_info['access_token'])
+        sp, message = get_spotify_client()
+        if not sp:
+            return {'success': False, 'error': message}
         sp.start_playback()
         return {'success': True, 'message': 'Playback started'}
     except Exception as e:
+        logger = logging.getLogger('Launcher')
+        logger.error(f"Play error: {str(e)}")
         return {'success': False, 'error': str(e)}
 
 @app.route('/spotify_pause', methods=['POST'])
 @rate_limit(0.5)
 def spotify_pause():
     try:
-        config = load_config()
-        sp_oauth = SpotifyOAuth(
-            client_id=config["api_keys"]["client_id"],
-            client_secret=config["api_keys"]["client_secret"],
-            redirect_uri=config["api_keys"]["redirect_uri"],
-            scope="user-read-currently-playing user-modify-playback-state user-read-playback-state",
-            cache_path=".spotify_cache"
-        )
-        token_info = sp_oauth.get_cached_token()
-        if not token_info:
-            return {'success': False, 'error': 'Not authenticated'}
-        sp = spotipy.Spotify(auth=token_info['access_token'])
+        sp, message = get_spotify_client()
+        if not sp:
+            return {'success': False, 'error': message}
         sp.pause_playback()
         return {'success': True, 'message': 'Playback paused'}
     except Exception as e:
+        logger = logging.getLogger('Launcher')
+        logger.error(f"Pause error: {str(e)}")
         return {'success': False, 'error': str(e)}
 
 @app.route('/spotify_next', methods=['POST'])
 @rate_limit(0.5)
 def spotify_next():
     try:
-        config = load_config()
-        sp_oauth = SpotifyOAuth(
-            client_id=config["api_keys"]["client_id"],
-            client_secret=config["api_keys"]["client_secret"],
-            redirect_uri=config["api_keys"]["redirect_uri"],
-            scope="user-read-currently-playing user-modify-playback-state user-read-playback-state",
-            cache_path=".spotify_cache"
-        )
-        token_info = sp_oauth.get_cached_token()
-        if not token_info:
-            return {'success': False, 'error': 'Not authenticated'}
-        sp = spotipy.Spotify(auth=token_info['access_token'])
+        sp, message = get_spotify_client()
+        if not sp:
+            return {'success': False, 'error': message}
         sp.next_track()
         return {'success': True, 'message': 'Skipped to next track'}
     except Exception as e:
+        logger = logging.getLogger('Launcher')
+        logger.error(f"Next track error: {str(e)}")
         return {'success': False, 'error': str(e)}
 
 @app.route('/spotify_previous', methods=['POST'])
 @rate_limit(0.5)
 def spotify_previous():
     try:
-        config = load_config()
-        sp_oauth = SpotifyOAuth(
-            client_id=config["api_keys"]["client_id"],
-            client_secret=config["api_keys"]["client_secret"],
-            redirect_uri=config["api_keys"]["redirect_uri"],
-            scope="user-read-currently-playing user-modify-playback-state user-read-playback-state",
-            cache_path=".spotify_cache"
-        )
-        token_info = sp_oauth.get_cached_token()
-        if not token_info:
-            return {'success': False, 'error': 'Not authenticated'}
-        sp = spotipy.Spotify(auth=token_info['access_token'])
+        sp, message = get_spotify_client()
+        if not sp:
+            return {'success': False, 'error': message}
         sp.previous_track()
         return {'success': True, 'message': 'Went to previous track'}
     except Exception as e:
+        logger = logging.getLogger('Launcher')
+        logger.error(f"Previous track error: {str(e)}")
         return {'success': False, 'error': str(e)}
 
 @app.route('/spotify_get_volume', methods=['GET'])
 def spotify_get_volume():
     try:
-        config = load_config()
-        sp_oauth = SpotifyOAuth(
-            client_id=config["api_keys"]["client_id"],
-            client_secret=config["api_keys"]["client_secret"],
-            redirect_uri=config["api_keys"]["redirect_uri"],
-            scope="user-read-currently-playing user-modify-playback-state user-read-playback-state",
-            cache_path=".spotify_cache"
-        )
-        token_info = sp_oauth.get_cached_token()
-        if not token_info:
-            return {'success': False, 'error': 'Not authenticated'}
-        sp = spotipy.Spotify(auth=token_info['access_token'])
+        sp, message = get_spotify_client()
+        if not sp:
+            return {'success': False, 'error': message}
         playback = sp.current_playback()
         if playback and 'device' in playback:
             current_volume = playback['device'].get('volume_percent', 50)
@@ -952,6 +942,8 @@ def spotify_get_volume():
         else:
             return {'success': True, 'volume': 50}
     except Exception as e:
+        logger = logging.getLogger('Launcher')
+        logger.error(f"Get volume error: {str(e)}")
         return {'success': False, 'error': str(e)}
 
 @app.route('/spotify_volume', methods=['POST'])
@@ -960,42 +952,26 @@ def spotify_volume():
     try:
         volume = request.json.get('volume', 50)
         volume = max(0, min(100, volume))
-        config = load_config()
-        sp_oauth = SpotifyOAuth(
-            client_id=config["api_keys"]["client_id"],
-            client_secret=config["api_keys"]["client_secret"],
-            redirect_uri=config["api_keys"]["redirect_uri"],
-            scope="user-read-currently-playing user-modify-playback-state user-read-playback-state",
-            cache_path=".spotify_cache"
-        )
-        token_info = sp_oauth.get_cached_token()
-        if not token_info:
-            return {'success': False, 'error': 'Not authenticated'}
-        sp = spotipy.Spotify(auth=token_info['access_token'])
+        sp, message = get_spotify_client()
+        if not sp:
+            return {'success': False, 'error': message}
         sp.volume(volume)
         return {'success': True, 'message': f'Volume set to {volume}%'}
     except Exception as e:
+        logger = logging.getLogger('Launcher')
+        logger.error(f"Volume set error: {str(e)}")
         return {'success': False, 'error': str(e)}
 
 @app.route('/spotify_search', methods=['POST'])
 @rate_limit(1.0)
 def spotify_search():
     try:
-        config = load_config()
         query = request.json.get('query', '').strip()
         if not query:
             return {'success': False, 'error': 'No search query provided'}
-        sp_oauth = SpotifyOAuth(
-            client_id=config["api_keys"]["client_id"],
-            client_secret=config["api_keys"]["client_secret"],
-            redirect_uri=config["api_keys"]["redirect_uri"],
-            scope="user-read-currently-playing user-modify-playback-state user-read-playback-state",
-            cache_path=".spotify_cache"
-        )
-        token_info = sp_oauth.get_cached_token()
-        if not token_info:
-            return {'success': False, 'error': 'Not authenticated with Spotify'}
-        sp = spotipy.Spotify(auth=token_info['access_token'])
+        sp, message = get_spotify_client()
+        if not sp:
+            return {'success': False, 'error': message}
         results = sp.search(q=query, type='track', limit=20)
         tracks = []
         for item in results['tracks']['items']:
@@ -1025,21 +1001,12 @@ def spotify_search():
 @rate_limit(0.5)
 def spotify_add_to_queue():
     try:
-        config = load_config()
         track_uri = request.json.get('track_uri', '').strip()
         if not track_uri:
             return {'success': False, 'error': 'No track URI provided'}
-        sp_oauth = SpotifyOAuth(
-            client_id=config["api_keys"]["client_id"],
-            client_secret=config["api_keys"]["client_secret"],
-            redirect_uri=config["api_keys"]["redirect_uri"],
-            scope="user-read-currently-playing user-modify-playback-state user-read-playback-state",
-            cache_path=".spotify_cache"
-        )
-        token_info = sp_oauth.get_cached_token()
-        if not token_info:
-            return {'success': False, 'error': 'Not authenticated with Spotify'}
-        sp = spotipy.Spotify(auth=token_info['access_token'])
+        sp, message = get_spotify_client()
+        if not sp:
+            return {'success': False, 'error': message}
         sp.add_to_queue(track_uri)
         return {'success': True, 'message': 'Track added to queue'}
     except Exception as e:
@@ -1050,18 +1017,9 @@ def spotify_add_to_queue():
 @app.route('/spotify_get_queue', methods=['GET'])
 def spotify_get_queue():
     try:
-        config = load_config()
-        sp_oauth = SpotifyOAuth(
-            client_id=config["api_keys"]["client_id"],
-            client_secret=config["api_keys"]["client_secret"],
-            redirect_uri=config["api_keys"]["redirect_uri"],
-            scope="user-read-currently-playing user-modify-playback-state user-read-playback-state",
-            cache_path=".spotify_cache"
-        )
-        token_info = sp_oauth.get_cached_token()
-        if not token_info:
-            return {'success': False, 'error': 'Not authenticated with Spotify'}
-        sp = spotipy.Spotify(auth=token_info['access_token'])
+        sp, message = get_spotify_client()
+        if not sp:
+            return {'success': False, 'error': message}
         playback = sp.current_playback()
         queue = sp.queue()
         queue_tracks = []
@@ -1099,21 +1057,12 @@ def spotify_get_queue():
 @rate_limit(0.5)
 def spotify_play_track():
     try:
-        config = load_config()
         track_uri = request.json.get('track_uri', '').strip()
         if not track_uri:
             return {'success': False, 'error': 'No track URI provided'}
-        sp_oauth = SpotifyOAuth(
-            client_id=config["api_keys"]["client_id"],
-            client_secret=config["api_keys"]["client_secret"],
-            redirect_uri=config["api_keys"]["redirect_uri"],
-            scope="user-read-currently-playing user-modify-playback-state user-read-playback-state",
-            cache_path=".spotify_cache"
-        )
-        token_info = sp_oauth.get_cached_token()
-        if not token_info:
-            return {'success': False, 'error': 'Not authenticated with Spotify'}
-        sp = spotipy.Spotify(auth=token_info['access_token'])
+        sp, message = get_spotify_client()
+        if not sp:
+            return {'success': False, 'error': message}
         sp.start_playback(uris=[track_uri])
         return {'success': True, 'message': 'Track started'}
     except Exception as e:
