@@ -16,7 +16,7 @@ def load_config():
             ui_config = config.get("ui", {})
             ap_ip = wifi_config.get("ap_ip", "192.168.42.1")
             ap_ssid = wifi_config.get("ap_ssid", "Neonwifi-Manager")
-            rescan_time = wifi_config.get("rescan_time", "600")
+            rescan_time = wifi_config.get("rescan_time", 600)
             theme = ui_config.get("theme", "dark")
             return {
                 "ap_ip": ap_ip,
@@ -28,14 +28,14 @@ def load_config():
             return {
                 "ap_ip": "192.168.42.1",
                 "ap_ssid": "Neonwifi-Manager",
-                "rescan_time": "600",
+                "rescan_time": 600,
                 "theme": "dark"
             }
     except Exception as e:
         return {
             "ap_ip": "192.168.42.1",
             "ap_ssid": "Neonwifi-Manager",
-            "rescan_time": "600",
+            "rescan_time": 600,
             "theme": "dark"
         }
 
@@ -804,20 +804,21 @@ def cleanup():
         subprocess.run(['sudo', 'systemctl', 'start', 'NetworkManager'], check=False)
         time.sleep(2)
         subprocess.run(['sudo', 'ip', 'addr', 'flush', 'dev', WIFI_INTERFACE], check=False)
-        subprocess.run(['sudo', 'ip', 'link', 'set', WIFI_INTERFACE, 'down'], check=False)
-        time.sleep(1)
-        result = subprocess.run(['sudo', 'nmcli', 'device', 'set', WIFI_INTERFACE, 'managed', 'yes'], capture_output=True, text=True, check=False)
-        time.sleep(1)
         subprocess.run(['sudo', 'ip', 'link', 'set', WIFI_INTERFACE, 'up'], check=False)
+        time.sleep(1)
+        subprocess.run(['sudo', 'nmcli', 'device', 'set', WIFI_INTERFACE, 'managed', 'yes'], capture_output=True, text=True, check=False)
+        time.sleep(1)
         AP_MODE_ACTIVE = False
     except Exception as e:
-        print(f"⚠️ Cleanup error (non-critical): {e}")
+        print(f"⚠️ Cleanup error: {e}")
+        subprocess.run(['sudo', 'ip', 'link', 'set', WIFI_INTERFACE, 'up'], check=False)
 
 def signal_handler(sig, frame):
     global SHUTDOWN_FLAG
     print("\n🛑 Shutdown signal received...")
     SHUTDOWN_FLAG = True
     cleanup()
+    time.sleep(2)
     sys.exit(0)
 
 def main():
