@@ -1,16 +1,66 @@
-<div style="max-width: 100%; margin: 0; padding: 20px; font-family: Arial; background: #ff0000; color: #000000;">
-    <div style="background: #ffff00; padding: 30px; border: 3px solid #000000;">
-        <h2 style="color: #000000;">Spotify Authentication</h2>
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Spotify Authentication</title>
+    <link rel="stylesheet" href="colors.css">
+    <style>
+        body { 
+            font-family: Arial, sans-serif; 
+            max-width: 100%;
+            margin: 0;
+            padding: 20px;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+        }
+        .container {
+            background: var(--bg-secondary);
+            padding: 30px;
+            border: 3px solid var(--border-color);
+        }
+        .auth-url {
+            background: var(--bg-tertiary);
+            padding: 15px; 
+            border: 2px solid var(--border-color);
+            word-break: break-all;
+        }
+        .styled-textarea {
+            width: 100%; 
+            height: 100px; 
+            margin: 10px 0; 
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            border: 2px solid var(--border-color);
+            padding: 10px; 
+            box-sizing: border-box;
+        }
+        .styled-button {
+            background: var(--accent-color);
+            color: var(--text-primary);
+            border: 2px solid var(--border-color); 
+            padding: 12px 20px; 
+            font-weight: bold; 
+            cursor: pointer;
+        }
+        a {
+            color: var(--accent-color);
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2>Spotify Authentication</h2>
         <p>Visit this URL to authenticate:</p>
-        <div style="background: #ff6666; padding: 15px; border: 2px solid #000000; word-break: break-all; color: #000000;">
+        <div class="auth-url">
             {{ auth_url }}
         </div>
-        <p><a href="{{ auth_url }}" target="_blank" style="color: #000000; font-weight: bold;">Click here to open</a></p>
+        <p><a href="{{ auth_url }}" target="_blank">Click here to open</a></p>
         <p>After authenticating, you'll be redirected. Copy the URL and paste it below:</p>
         <form method="POST" action="/process_callback_url">
-            <textarea name="callback_url" placeholder="Paste the callback URL here..." style="width: 100%; height: 100px; margin: 10px 0; background: #ffff00; color: #000000; border: 2px solid #000000; padding: 10px; box-sizing: border-box;"></textarea>
-            <button type="submit" style="background: #ff0000; color: #000000; border: 2px solid #000000; padding: 12px 20px; font-weight: bold; cursor: pointer;">Process Authentication</button>
+            <textarea name="callback_url" placeholder="Paste the callback URL here..." class="styled-textarea"></textarea>
+            <button type="submit" class="styled-button">Process Authentication</button>
         </form>
-        <p><a href="/" style="color: #000000; font-weight: bold;">← Back to setup</a></p>
+        <p><a href="/">← Back to setup</a></p>
     </div>
-</div>
+</body>
+</html>
