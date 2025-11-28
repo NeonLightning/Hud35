@@ -1833,10 +1833,12 @@ def wake_up_display():
         update_display()
 
 def go_to_sleep():
-    global display_sleeping
+    global display_sleeping, last_display_time
     if not display_sleeping:
         display_sleeping = True
-        print(f"🛑 Display sleeping due to {SLEEP_TIMEOUT}s of no playback")
+        print(f"🛌 Display sleeping due to {SLEEP_TIMEOUT}s of no playback")
+        time.sleep(0.05)
+        last_display_time = 0
         clear_framebuffer()
 
 def sleep_monitor_loop():

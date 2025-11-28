@@ -137,6 +137,40 @@
             font-weight: bold;
             color: var(--text-primary);
         }
+        .song-actions {
+            display: flex;
+            gap: 6px;
+            margin-top: 8px;
+            flex-wrap: wrap;
+        }
+        .action-button {
+            padding: 6px 12px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+            white-space: nowrap;
+            transition: all 0.2s ease;
+        }
+        .play-button {
+            background: var(--accent-color);
+            color: white;
+        }
+        .play-button:hover:not(:disabled) {
+            background: var(--accent-hover);
+        }
+        .queue-button {
+            background: var(--warning-color);
+            color: #212529;
+        }
+        .queue-button:hover:not(:disabled) {
+            background: #e0a800;
+        }
+        .action-button:disabled {
+            background: var(--border-color);
+            cursor: not-allowed;
+            opacity: 0.6;
+        }
         .artist-bar-item {
             display: flex;
             align-items: center;
@@ -172,6 +206,33 @@
             text-align: right;
             font-size: 12px;
             font-weight: bold;
+        }
+        .status {
+            padding: 10px;
+            border-radius: 5px;
+            margin: 10px 0;
+            text-align: center;
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            max-width: 400px;
+            z-index: 1000;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+        .status.info {
+            background: #004085;
+            color: white;
+            border: 1px solid #b3d7ff;
+        }
+        .status.success {
+            background: #155724;
+            color: white;
+            border: 1px solid #c3e6cb;
+        }
+        .status.error {
+            background: #721c24;
+            color: white;
+            border: 1px solid #f5c6cb;
         }
         input, button, select {
             padding: 8px 12px;
@@ -228,10 +289,17 @@
                 min-height: 250px;
                 max-height: 350px;
             }
+            .status {
+                top: 10px;
+                right: 10px;
+                left: 10px;
+                max-width: none;
+            }
         }
     </style>
 </head>
 <body data-theme="{{ ui_config.theme }}">
+    <div id="statusContainer"></div>
     <div class="container">
         <div class="header">
             <h1>🎵 Music Statistics</h1>
@@ -278,6 +346,10 @@
                                 </div>
                                 <div class="bar-count">{{ count }}</div>
                             </div>
+                            <div class="song-actions">
+                                <button class="action-button queue-button" onclick="searchAndQueue('{{ label }}')">➕ Queue</button>
+                                <button class="action-button play-button" onclick="searchAndPlay('{{ label }}')">▶ Play</button>
+                            </div>
                         </div>
                         {% endfor %}
                     </div>
@@ -301,7 +373,145 @@
             </div>
         </div>
     </div>
-    <script>
+<script>
+    let lastRequestTime = 0;
+    let isRequestInProgress = false;
+    function getRateLimitForAction(action) {
+        const limits = {
+            'play': 2000,
+            'queue': 1500,
+            'search': 1000
+        };
+        return limits[action] || 1000;
+    }
+    function canMakeRequest(action) {
+        if (isRequestInProgress) return false;
+        const now = Date.now();
+        const actionLimit = getRateLimitForAction(action);
+        if (now - lastRequestTime < actionLimit) return false;
+        isRequestInProgress = true;
+        lastRequestTime = now;
+        return true;
+    }
+    function completeRequest() {
+        isRequestInProgress = false;
+    }
+    function showStatus(message, type) {
+        const statusContainer = document.getElementById('statusContainer');
+        const statusDiv = document.createElement('div');
+        statusDiv.className = `status ${type}`;
+        statusDiv.textContent = message;
+        statusContainer.appendChild(statusDiv);
+        setTimeout(() => {
+            statusDiv.remove();
+        }, 3000);
+    }
+    function searchAndQueue(songLabel) {
+        if (!canMakeRequest('search')) {
+            showStatus('Please wait before queueing another track', 'error');
+            return;
+        }
+        const parts = songLabel.split(' - ');
+        const query = parts.length > 1 ? `${parts[0]} ${parts[1]}` : songLabel;
+        showStatus(`Searching for "${query}"...`, 'info');
+        fetch('/spotify_search', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ query: query })
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success && data.tracks && data.tracks.length > 0) {
+                const firstTrack = data.tracks[0];
+                return addToQueue(firstTrack.uri, firstTrack.name);
+            } else {
+                throw new Error('No tracks found');
+            }
+        })
+        .catch(error => {
+            showStatus('Search error: ' + error, 'error');
+            completeRequest();
+        });
+    }
+    function searchAndPlay(songLabel) {
+        if (!canMakeRequest('search')) {
+            showStatus('Please wait before playing another track', 'error');
+            return;
+        }
+        const parts = songLabel.split(' - ');
+        const query = parts.length > 1 ? `${parts[0]} ${parts[1]}` : songLabel;
+        showStatus(`Searching for "${query}"...`, 'info');
+        fetch('/spotify_search', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ query: query })
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success && data.tracks && data.tracks.length > 0) {
+                const firstTrack = data.tracks[0];
+                return playTrack(firstTrack.uri, firstTrack.name);
+            } else {
+                throw new Error('No tracks found');
+            }
+        })
+        .catch(error => {
+            showStatus('Search error: ' + error, 'error');
+            completeRequest();
+        });
+    }
+    function playTrack(trackUri, trackName) {
+        showStatus(`Playing "${trackName}"...`, 'info');
+        fetch('/spotify_play_track', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ track_uri: trackUri })
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                showStatus(`Now playing "${trackName}"!`, 'success');
+            } else {
+                showStatus('Play failed: ' + data.error, 'error');
+            }
+        })
+        .catch(error => {
+            showStatus('Play error: ' + error, 'error');
+        })
+        .finally(() => {
+            completeRequest();
+        });
+    }
+    function addToQueue(trackUri, trackName) {
+        showStatus(`Adding "${trackName}" to queue...`, 'info');
+        fetch('/spotify_add_to_queue', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ track_uri: trackUri })
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                showStatus(`"${trackName}" added to queue!`, 'success');
+            } else {
+                showStatus('Add to queue failed: ' + data.error, 'error');
+            }
+        })
+        .catch(error => {
+            showStatus('Queue error: ' + error, 'error');
+        })
+        .finally(() => {
+            completeRequest();
+        });
+    }
     function toggleTheme() {
         const currentTheme = document.body.getAttribute('data-theme');
         const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
@@ -347,20 +557,26 @@
             const maxCount = songItems[0][1];
             songItems.forEach((item, index) => {
                 const [label, count, color] = item;
-                const [artist, song] = label.split(' -- ');
+                const parts = label.split(' - ');
+                const song = parts[0] || label;
+                const artist = parts[1] || 'Unknown Artist';
                 const percentage = maxCount > 0 ? (count / maxCount) * 100 : 0;
                 const barItem = document.createElement('div');
                 barItem.className = 'bar-item';
                 barItem.innerHTML = `
-                    <div class="song-name" title="${song || label}">${index + 1}. ${song || label}</div>
-                    <div class="artist-name" title="${artist || 'Unknown Artist'}">
-                        ${artist || 'Unknown Artist'}
+                    <div class="song-name" title="${song}">${index + 1}. ${song}</div>
+                    <div class="artist-name" title="${artist}">
+                        ${artist}
                     </div>
                     <div class="bar-track-container">
                         <div class="bar-track">
                             <div class="bar-fill" style="width: ${percentage}%; background: ${color || '#007bff'};"></div>
                         </div>
                         <div class="bar-count">${count}</div>
+                    </div>
+                    <div class="song-actions">
+                        <button class="action-button queue-button" onclick="searchAndQueue('${label.replace(/'/g, "\\'")}')">➕ Queue</button>
+                        <button class="action-button play-button" onclick="searchAndPlay('${label.replace(/'/g, "\\'")}')">▶ Play</button>
                     </div>
                 `;
                 songChart.appendChild(barItem);
@@ -377,7 +593,6 @@
             artistItems.forEach((item, index) => {
                 const [label, count, color] = item;
                 const percentage = maxCount > 0 ? (count / maxCount) * 100 : 0;
-                
                 const barItem = document.createElement('div');
                 barItem.className = 'artist-bar-item';
                 barItem.innerHTML = `
@@ -412,7 +627,6 @@
     }
     document.addEventListener('DOMContentLoaded', function() {
         setupCurrentTrackSSE();
-        
         fetch('/api/current_track')
             .then(response => response.json())
             .then(data => {
@@ -429,6 +643,6 @@
         setInterval(refreshStats, 5000);
         refreshStats();
     });
-    </script>
+</script>
 </body>
 </html>
