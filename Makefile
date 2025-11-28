@@ -133,11 +133,11 @@ config-api:
 		echo "$(YELLOW)Creating default config file...$(NC)"; \
 		make create-default-config > /dev/null 2>&1; \
 	fi
-	@current_openweather=$$(python3 -c "import toml; config = toml.load('$(CONFIG_FILE)'); print(config.get('api_keys', {}).get('openweather', ''))" 2>/dev/null || echo ""); \
-	current_google_geo=$$(python3 -c "import toml; config = toml.load('$(CONFIG_FILE)'); print(config.get('api_keys', {}).get('google_geo', ''))" 2>/dev/null || echo ""); \
-	current_client_id=$$(python3 -c "import toml; config = toml.load('$(CONFIG_FILE)'); print(config.get('api_keys', {}).get('client_id', ''))" 2>/dev/null || echo ""); \
-	current_client_secret=$$(python3 -c "import toml; config = toml.load('$(CONFIG_FILE)'); print(config.get('api_keys', {}).get('client_secret', ''))" 2>/dev/null || echo ""); \
-	current_redirect_uri=$$(python3 -c "import toml; config = toml.load('$(CONFIG_FILE)'); print(config.get('api_keys', {}).get('redirect_uri', 'http://127.0.0.1:5000'))" 2>/dev/null || echo "http://127.0.0.1:5000"); \
+	@current_openweather=$$($(VENV_DIR)/bin/python3 -c "import toml; config = toml.load('$(CONFIG_FILE)'); print(config.get('api_keys', {}).get('openweather', ''))" 2>/dev/null || echo ""); \
+	current_google_geo=$$($(VENV_DIR)/bin/python3 -c "import toml; config = toml.load('$(CONFIG_FILE)'); print(config.get('api_keys', {}).get('google_geo', ''))" 2>/dev/null || echo ""); \
+	current_client_id=$$($(VENV_DIR)/bin/python3 -c "import toml; config = toml.load('$(CONFIG_FILE)'); print(config.get('api_keys', {}).get('client_id', ''))" 2>/dev/null || echo ""); \
+	current_client_secret=$$($(VENV_DIR)/bin/python3 -c "import toml; config = toml.load('$(CONFIG_FILE)'); print(config.get('api_keys', {}).get('client_secret', ''))" 2>/dev/null || echo ""); \
+	current_redirect_uri=$$($(VENV_DIR)/bin/python3 -c "import toml; config = toml.load('$(CONFIG_FILE)'); print(config.get('api_keys', {}).get('redirect_uri', 'http://127.0.0.1:5000'))" 2>/dev/null || echo "http://127.0.0.1:5000"); \
 	echo "$(YELLOW)Current values (press Enter to keep):$(NC)"; \
 	echo "  OpenWeather API Key: $$current_openweather"; \
 	read -p "  New OpenWeather API Key: " openweather; \
@@ -164,15 +164,15 @@ config-display:
 		echo "$(YELLOW)Creating default config file...$(NC)"; \
 		make create-default-config > /dev/null 2>&1; \
 	fi
-	@current_display_type=$$(python3 -c "import toml; config = toml.load('$(CONFIG_FILE)'); print(config.get('display', {}).get('type', 'dummy'))" 2>/dev/null || echo "dummy"); \
-	current_framebuffer=$$(python3 -c "import toml; config = toml.load('$(CONFIG_FILE)'); print(config.get('display', {}).get('framebuffer', '/dev/fb1'))" 2>/dev/null || echo "/dev/fb1"); \
-	current_rotation=$$(python3 -c "import toml; config = toml.load('$(CONFIG_FILE)'); print(config.get('display', {}).get('rotation', 0))" 2>/dev/null || echo "0"); \
-	current_spi_port=$$(python3 -c "import toml; config = toml.load('$(CONFIG_FILE)'); print(config.get('display', {}).get('st7789', {}).get('spi_port', 0))" 2>/dev/null || echo "0"); \
-	current_spi_cs=$$(python3 -c "import toml; config = toml.load('$(CONFIG_FILE)'); print(config.get('display', {}).get('st7789', {}).get('spi_cs', 1))" 2>/dev/null || echo "1"); \
-	current_dc_pin=$$(python3 -c "import toml; config = toml.load('$(CONFIG_FILE)'); print(config.get('display', {}).get('st7789', {}).get('dc_pin', 9))" 2>/dev/null || echo "9"); \
-	current_backlight_pin=$$(python3 -c "import toml; config = toml.load('$(CONFIG_FILE)'); print(config.get('display', {}).get('st7789', {}).get('backlight_pin', 13))" 2>/dev/null || echo "13"); \
-	current_st7789_rotation=$$(python3 -c "import toml; config = toml.load('$(CONFIG_FILE)'); print(config.get('display', {}).get('st7789', {}).get('rotation', 0))" 2>/dev/null || echo "0"); \
-	current_spi_speed=$$(python3 -c "import toml; config = toml.load('$(CONFIG_FILE)'); print(config.get('display', {}).get('st7789', {}).get('spi_speed', 60000000))" 2>/dev/null || echo "60000000"); \
+	@current_display_type=$$($(VENV_DIR)/bin/python3 -c "import toml; config = toml.load('$(CONFIG_FILE)'); print(config.get('display', {}).get('type', 'dummy'))" 2>/dev/null || echo "dummy"); \
+	current_framebuffer=$$($(VENV_DIR)/bin/python3 -c "import toml; config = toml.load('$(CONFIG_FILE)'); print(config.get('display', {}).get('framebuffer', '/dev/fb1'))" 2>/dev/null || echo "/dev/fb1"); \
+	current_rotation=$$($(VENV_DIR)/bin/python3 -c "import toml; config = toml.load('$(CONFIG_FILE)'); print(config.get('display', {}).get('rotation', 0))" 2>/dev/null || echo "0"); \
+	current_spi_port=$$($(VENV_DIR)/bin/python3 -c "import toml; config = toml.load('$(CONFIG_FILE)'); print(config.get('display', {}).get('st7789', {}).get('spi_port', 0))" 2>/dev/null || echo "0"); \
+	current_spi_cs=$$($(VENV_DIR)/bin/python3 -c "import toml; config = toml.load('$(CONFIG_FILE)'); print(config.get('display', {}).get('st7789', {}).get('spi_cs', 1))" 2>/dev/null || echo "1"); \
+	current_dc_pin=$$($(VENV_DIR)/bin/python3 -c "import toml; config = toml.load('$(CONFIG_FILE)'); print(config.get('display', {}).get('st7789', {}).get('dc_pin', 9))" 2>/dev/null || echo "9"); \
+	current_backlight_pin=$$($(VENV_DIR)/bin/python3 -c "import toml; config = toml.load('$(CONFIG_FILE)'); print(config.get('display', {}).get('st7789', {}).get('backlight_pin', 13))" 2>/dev/null || echo "13"); \
+	current_st7789_rotation=$$($(VENV_DIR)/bin/python3 -c "import toml; config = toml.load('$(CONFIG_FILE)'); print(config.get('display', {}).get('st7789', {}).get('rotation', 0))" 2>/dev/null || echo "0"); \
+	current_spi_speed=$$($(VENV_DIR)/bin/python3 -c "import toml; config = toml.load('$(CONFIG_FILE)'); print(config.get('display', {}).get('st7789', {}).get('spi_speed', 60000000))" 2>/dev/null || echo "60000000"); \
 	echo "$(YELLOW)Current values (press Enter to keep):$(NC)"; \
 	echo "  Display Type: $$current_display_type"; \
 	read -p "  New Display Type (framebuffer, st7789, dummy)[dummy]: " display_type; \
@@ -212,18 +212,18 @@ config-fonts:
 		echo "$(YELLOW)Creating default config file...$(NC)"; \
 		make create-default-config > /dev/null 2>&1; \
 	fi
-	@current_large_font_path=$$(python3 -c "import toml; config = toml.load('$(CONFIG_FILE)'); print(config.get('fonts', {}).get('large_font_path', '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf'))" 2>/dev/null || echo "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"); \
-	current_large_font_size=$$(python3 -c "import toml; config = toml.load('$(CONFIG_FILE)'); print(config.get('fonts', {}).get('large_font_size', 36))" 2>/dev/null || echo "36"); \
-	current_medium_font_path=$$(python3 -c "import toml; config = toml.load('$(CONFIG_FILE)'); print(config.get('fonts', {}).get('medium_font_path', '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'))" 2>/dev/null || echo "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"); \
-	current_medium_font_size=$$(python3 -c "import toml; config = toml.load('$(CONFIG_FILE)'); print(config.get('fonts', {}).get('medium_font_size', 24))" 2>/dev/null || echo "24"); \
-	current_small_font_path=$$(python3 -c "import toml; config = toml.load('$(CONFIG_FILE)'); print(config.get('fonts', {}).get('small_font_path', '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'))" 2>/dev/null || echo "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"); \
-	current_small_font_size=$$(python3 -c "import toml; config = toml.load('$(CONFIG_FILE)'); print(config.get('fonts', {}).get('small_font_size', 16))" 2>/dev/null || echo "16"); \
-	current_spot_large_font_path=$$(python3 -c "import toml; config = toml.load('$(CONFIG_FILE)'); print(config.get('fonts', {}).get('spot_large_font_path', '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf'))" 2>/dev/null || echo "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"); \
-	current_spot_large_font_size=$$(python3 -c "import toml; config = toml.load('$(CONFIG_FILE)'); print(config.get('fonts', {}).get('spot_large_font_size', 26))" 2>/dev/null || echo "26"); \
-	current_spot_medium_font_path=$$(python3 -c "import toml; config = toml.load('$(CONFIG_FILE)'); print(config.get('fonts', {}).get('spot_medium_font_path', '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'))" 2>/dev/null || echo "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"); \
-	current_spot_medium_font_size=$$(python3 -c "import toml; config = toml.load('$(CONFIG_FILE)'); print(config.get('fonts', {}).get('spot_medium_font_size', 18))" 2>/dev/null || echo "18"); \
-	current_spot_small_font_path=$$(python3 -c "import toml; config = toml.load('$(CONFIG_FILE)'); print(config.get('fonts', {}).get('spot_small_font_path', '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'))" 2>/dev/null || echo "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"); \
-	current_spot_small_font_size=$$(python3 -c "import toml; config = toml.load('$(CONFIG_FILE)'); print(config.get('fonts', {}).get('spot_small_font_size', 12))" 2>/dev/null || echo "12"); \
+	@current_large_font_path=$$($(VENV_DIR)/bin/python3 -c "import toml; config = toml.load('$(CONFIG_FILE)'); print(config.get('fonts', {}).get('large_font_path', '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf'))" 2>/dev/null || echo "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"); \
+	current_large_font_size=$$($(VENV_DIR)/bin/python3 -c "import toml; config = toml.load('$(CONFIG_FILE)'); print(config.get('fonts', {}).get('large_font_size', 36))" 2>/dev/null || echo "36"); \
+	current_medium_font_path=$$($(VENV_DIR)/bin/python3 -c "import toml; config = toml.load('$(CONFIG_FILE)'); print(config.get('fonts', {}).get('medium_font_path', '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'))" 2>/dev/null || echo "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"); \
+	current_medium_font_size=$$($(VENV_DIR)/bin/python3 -c "import toml; config = toml.load('$(CONFIG_FILE)'); print(config.get('fonts', {}).get('medium_font_size', 24))" 2>/dev/null || echo "24"); \
+	current_small_font_path=$$($(VENV_DIR)/bin/python3 -c "import toml; config = toml.load('$(CONFIG_FILE)'); print(config.get('fonts', {}).get('small_font_path', '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'))" 2>/dev/null || echo "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"); \
+	current_small_font_size=$$($(VENV_DIR)/bin/python3 -c "import toml; config = toml.load('$(CONFIG_FILE)'); print(config.get('fonts', {}).get('small_font_size', 16))" 2>/dev/null || echo "16"); \
+	current_spot_large_font_path=$$($(VENV_DIR)/bin/python3 -c "import toml; config = toml.load('$(CONFIG_FILE)'); print(config.get('fonts', {}).get('spot_large_font_path', '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf'))" 2>/dev/null || echo "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"); \
+	current_spot_large_font_size=$$($(VENV_DIR)/bin/python3 -c "import toml; config = toml.load('$(CONFIG_FILE)'); print(config.get('fonts', {}).get('spot_large_font_size', 26))" 2>/dev/null || echo "26"); \
+	current_spot_medium_font_path=$$($(VENV_DIR)/bin/python3 -c "import toml; config = toml.load('$(CONFIG_FILE)'); print(config.get('fonts', {}).get('spot_medium_font_path', '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'))" 2>/dev/null || echo "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"); \
+	current_spot_medium_font_size=$$($(VENV_DIR)/bin/python3 -c "import toml; config = toml.load('$(CONFIG_FILE)'); print(config.get('fonts', {}).get('spot_medium_font_size', 18))" 2>/dev/null || echo "18"); \
+	current_spot_small_font_path=$$($(VENV_DIR)/bin/python3 -c "import toml; config = toml.load('$(CONFIG_FILE)'); print(config.get('fonts', {}).get('spot_small_font_path', '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'))" 2>/dev/null || echo "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"); \
+	current_spot_small_font_size=$$($(VENV_DIR)/bin/python3 -c "import toml; config = toml.load('$(CONFIG_FILE)'); print(config.get('fonts', {}).get('spot_small_font_size', 12))" 2>/dev/null || echo "12"); \
 	echo "$(YELLOW)Current values (press Enter to keep):$(NC)"; \
 	echo "$(YELLOW)Main Fonts:$(NC)"; \
 	echo "  Large Font Path: $$current_large_font_path"; \
@@ -273,10 +273,10 @@ config-buttons:
 		echo "$(YELLOW)Creating default config file...$(NC)"; \
 		make create-default-config > /dev/null 2>&1; \
 	fi
-	@current_button_a=$$(python3 -c "import toml; config = toml.load('$(CONFIG_FILE)'); print(config.get('buttons', {}).get('button_a', 5))" 2>/dev/null || echo "5"); \
-	current_button_b=$$(python3 -c "import toml; config = toml.load('$(CONFIG_FILE)'); print(config.get('buttons', {}).get('button_b', 6))" 2>/dev/null || echo "6"); \
-	current_button_x=$$(python3 -c "import toml; config = toml.load('$(CONFIG_FILE)'); print(config.get('buttons', {}).get('button_x', 16))" 2>/dev/null || echo "16"); \
-	current_button_y=$$(python3 -c "import toml; config = toml.load('$(CONFIG_FILE)'); print(config.get('buttons', {}).get('button_y', 24))" 2>/dev/null || echo "24"); \
+	@current_button_a=$$($(VENV_DIR)/bin/python3 -c "import toml; config = toml.load('$(CONFIG_FILE)'); print(config.get('buttons', {}).get('button_a', 5))" 2>/dev/null || echo "5"); \
+	current_button_b=$$($(VENV_DIR)/bin/python3 -c "import toml; config = toml.load('$(CONFIG_FILE)'); print(config.get('buttons', {}).get('button_b', 6))" 2>/dev/null || echo "6"); \
+	current_button_x=$$($(VENV_DIR)/bin/python3 -c "import toml; config = toml.load('$(CONFIG_FILE)'); print(config.get('buttons', {}).get('button_x', 16))" 2>/dev/null || echo "16"); \
+	current_button_y=$$($(VENV_DIR)/bin/python3 -c "import toml; config = toml.load('$(CONFIG_FILE)'); print(config.get('buttons', {}).get('button_y', 24))" 2>/dev/null || echo "24"); \
 	echo "$(YELLOW)Current values (press Enter to keep):$(NC)"; \
 	echo "  Button A GPIO Pin: $$current_button_a"; \
 	read -p "  New Button A GPIO Pin [5]: " button_a; \
@@ -300,8 +300,8 @@ config-wifi:
 		echo "$(YELLOW)Creating default config file...$(NC)"; \
 		make create-default-config > /dev/null 2>&1; \
 	fi
-	@current_ap_ssid=$$(python3 -c "import toml; config = toml.load('$(CONFIG_FILE)'); print(config.get('wifi', {}).get('ap_ssid', 'Neonwifi-Manager'))" 2>/dev/null || echo "Neonwifi-Manager"); \
-	current_ap_ip=$$(python3 -c "import toml; config = toml.load('$(CONFIG_FILE)'); print(config.get('wifi', {}).get('ap_ip', '192.168.42.1'))" 2>/dev/null || echo "192.168.42.1"); \
+	@current_ap_ssid=$$($(VENV_DIR)/bin/python3 -c "import toml; config = toml.load('$(CONFIG_FILE)'); print(config.get('wifi', {}).get('ap_ssid', 'Neonwifi-Manager'))" 2>/dev/null || echo "Neonwifi-Manager"); \
+	current_ap_ip=$$($(VENV_DIR)/bin/python3 -c "import toml; config = toml.load('$(CONFIG_FILE)'); print(config.get('wifi', {}).get('ap_ip', '192.168.42.1'))" 2>/dev/null || echo "192.168.42.1"); \
 	echo "$(YELLOW)Current values (press Enter to keep):$(NC)"; \
 	echo "  AP SSID: $$current_ap_ssid"; \
 	read -p "  New AP SSID [Neonwifi-Manager]: " ap_ssid; \
@@ -319,16 +319,16 @@ config-settings:
 		echo "$(YELLOW)Creating default config file...$(NC)"; \
 		make create-default-config > /dev/null 2>&1; \
 	fi
-	@current_start_screen=$$(python3 -c "import toml; config = toml.load('$(CONFIG_FILE)'); print(config.get('settings', {}).get('start_screen', 'spotify'))" 2>/dev/null || echo "spotify"); \
-	current_fallback_city=$$(python3 -c "import toml; config = toml.load('$(CONFIG_FILE)'); print(config.get('settings', {}).get('fallback_city', ''))" 2>/dev/null || echo ""); \
-	current_clock_type=$$(python3 -c "import toml; config = toml.load('$(CONFIG_FILE)'); print(config.get('clock', {}).get('type', 'analog'))" 2>/dev/null || echo "analog"); \
-	current_clock_background=$$(python3 -c "import toml; config = toml.load('$(CONFIG_FILE)'); print(config.get('clock', {}).get('background', 'color'))" 2>/dev/null || echo "color"); \
-	current_clock_color=$$(python3 -c "import toml; config = toml.load('$(CONFIG_FILE)'); print(config.get('clock', {}).get('color', 'black'))" 2>/dev/null || echo "black"); \
-	current_use_gpsd=$$(python3 -c "import toml; config = toml.load('$(CONFIG_FILE)'); print(config.get('settings', {}).get('use_gpsd', True))" 2>/dev/null || echo "True"); \
-	current_use_google_geo=$$(python3 -c "import toml; config = toml.load('$(CONFIG_FILE)'); print(config.get('settings', {}).get('use_google_geo', True))" 2>/dev/null || echo "True"); \
-	current_time_display=$$(python3 -c "import toml; config = toml.load('$(CONFIG_FILE)'); print(config.get('settings', {}).get('time_display', True))" 2>/dev/null || echo "True"); \
-	current_progressbar_display=$$(python3 -c "import toml; config = toml.load('$(CONFIG_FILE)'); print(config.get('settings', {}).get('progressbar_display', True))" 2>/dev/null || echo "True"); \
-	current_enable_current_track_display=$$(python3 -c "import toml; config = toml.load('$(CONFIG_FILE)'); print(config.get('settings', {}).get('enable_current_track_display', True))" 2>/dev/null || echo "True"); \
+	@current_start_screen=$$($(VENV_DIR)/bin/python3 -c "import toml; config = toml.load('$(CONFIG_FILE)'); print(config.get('settings', {}).get('start_screen', 'spotify'))" 2>/dev/null || echo "spotify"); \
+	current_fallback_city=$$($(VENV_DIR)/bin/python3 -c "import toml; config = toml.load('$(CONFIG_FILE)'); print(config.get('settings', {}).get('fallback_city', ''))" 2>/dev/null || echo ""); \
+	current_clock_type=$$($(VENV_DIR)/bin/python3 -c "import toml; config = toml.load('$(CONFIG_FILE)'); print(config.get('clock', {}).get('type', 'analog'))" 2>/dev/null || echo "analog"); \
+	current_clock_background=$$($(VENV_DIR)/bin/python3 -c "import toml; config = toml.load('$(CONFIG_FILE)'); print(config.get('clock', {}).get('background', 'color'))" 2>/dev/null || echo "color"); \
+	current_clock_color=$$($(VENV_DIR)/bin/python3 -c "import toml; config = toml.load('$(CONFIG_FILE)'); print(config.get('clock', {}).get('color', 'black'))" 2>/dev/null || echo "black"); \
+	current_use_gpsd=$$($(VENV_DIR)/bin/python3 -c "import toml; config = toml.load('$(CONFIG_FILE)'); print(config.get('settings', {}).get('use_gpsd', True))" 2>/dev/null || echo "True"); \
+	current_use_google_geo=$$($(VENV_DIR)/bin/python3 -c "import toml; config = toml.load('$(CONFIG_FILE)'); print(config.get('settings', {}).get('use_google_geo', True))" 2>/dev/null || echo "True"); \
+	current_time_display=$$($(VENV_DIR)/bin/python3 -c "import toml; config = toml.load('$(CONFIG_FILE)'); print(config.get('settings', {}).get('time_display', True))" 2>/dev/null || echo "True"); \
+	current_progressbar_display=$$($(VENV_DIR)/bin/python3 -c "import toml; config = toml.load('$(CONFIG_FILE)'); print(config.get('settings', {}).get('progressbar_display', True))" 2>/dev/null || echo "True"); \
+	current_enable_current_track_display=$$($(VENV_DIR)/bin/python3 -c "import toml; config = toml.load('$(CONFIG_FILE)'); print(config.get('settings', {}).get('enable_current_track_display', True))" 2>/dev/null || echo "True"); \
 	echo "$(YELLOW)Current values (press Enter to keep):$(NC)"; \
 	echo "  Start Screen: $$current_start_screen"; \
 	read -p "  New Start Screen [spotify]: " start_screen; \
